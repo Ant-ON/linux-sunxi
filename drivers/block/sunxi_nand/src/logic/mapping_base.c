@@ -1,30 +1,56 @@
 /*
- * drivers/block/sunxi_nand/src/logic/mapping_base.c
+ * Copyright (C) 2013 Allwinnertech, kevin.z.m <kevin@allwinnertech.com>
  *
- * (C) Copyright 2007-2012
- * Allwinner Technology Co., Ltd. <www.allwinnertech.com>
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License as
- * published by the Free Software Foundation; either version 2 of
- * the License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.	 See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston,
- * MA 02111-1307 USA
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
  */
 
 #include "../include/nand_logic.h"
 
 extern struct __NandDriverGlobal_t     NandDriverInfo;
+extern struct __NandPartInfo_t         NandPartInfo[NAND_MAX_PART_CNT];
+extern __u8 *lsb_page;
 
+__u32 PMM_CalNextLogPage(__u32 current_page)
+{
+	__u32 next_page = 0xffff;
+	__u32 page_index = current_page;
 
+	if(SUPPORT_LOG_BLOCK_MANAGE)
+	{
+		//DBUG_MSG("[DBUG_MSG] PMM_CalNextLogPage, select bak log block\n");
+		if(current_page == 0xffff)
+			next_page = 0;
+		else
+		{
+			while(page_index <PAGE_CNT_OF_LOGIC_BLK)
+			{
+				if(lsb_page[page_index] == 1)
+				{
+					next_page = page_index;
+					break;
+				}
+				else
+				{
+					page_index++;
+				}
+			}
+
+			if(page_index == PAGE_CNT_OF_LOGIC_BLK)
+				next_page = PAGE_CNT_OF_LOGIC_BLK;
+
+			if((page_index<PAGE_CNT_OF_LOGIC_BLK)&&(lsb_page[page_index]!= 1))
+				PRINT("PMM_CalNextLogPage error, current: %x, next: %x\n", current_page, next_page);
+		}
+	}
+	else
+		next_page = current_page;
+
+	DBUG_MSG("[DBUG] PMM_CalNextLogPage, current: %x, next: %x\n", current_page, next_page);
+
+	return next_page;
+}
 /*
 ************************************************************************************************************************
 *                           CALCULATE THE ACCESS COUNT OF THE LOG BLOCK
@@ -194,6 +220,8 @@ __s32 BMM_GetFreeBlk(__u32 nType, struct __SuperPhyBlkType_t *pFreeBlk)
     FREE_BLK_TBL[tmpFreePst].PhyBlkNum = 0xffff;
     FREE_BLK_TBL[tmpFreePst].BlkEraseCnt = 0xffff;
 
+	DBUG_MSG("[DBUG] BMM_GetFreeBlk, pos: %x\n", LAST_FREE_BLK_PST);
+
     return 0;
 }
 
@@ -223,6 +251,7 @@ __s32 BMM_SetFreeBlk(struct __SuperPhyBlkType_t *pFreeBlk)
             FREE_BLK_TBL[i].PhyBlkNum = pFreeBlk->PhyBlkNum;
             FREE_BLK_TBL[i].BlkEraseCnt = pFreeBlk->BlkEraseCnt;
 
+			DBUG_MSG("[DBUG] BMM_SetFreeBlk, pos: %x\n", i);
             return 0;
         }
     }
@@ -281,9 +310,12 @@ static __s32 _GetLogBlkPst(__u32 nBlk)
 */
 __s32 BMM_GetLogBlk(__u32 nLogicBlk, struct __LogBlkType_t *pLogBlk)
 {
-    __s32   tmpLogPst;
+    __s32   tmpLogPst, result;
+	struct __SuperPhyBlkType_t tmpFreeBlk1;
+	__u32   LogBlkType;
 
     tmpLogPst = _GetLogBlkPst(nLogicBlk);
+
     if(tmpLogPst < 0)
     {
         //if the logic block number is invalid, report error
@@ -296,8 +328,15 @@ __s32 BMM_GetLogBlk(__u32 nLogicBlk, struct __LogBlkType_t *pLogBlk)
         {
             pLogBlk->LogicBlkNum = 0xffff;
             pLogBlk->LastUsedPage = 0xffff;
+			pLogBlk->LogBlkType = 0;
+			pLogBlk->ReadBlkIndex = 0;
+			pLogBlk->WriteBlkIndex = 0;
             pLogBlk->PhyBlk.PhyBlkNum = 0xffff;
             pLogBlk->PhyBlk.BlkEraseCnt = 0xffff;
+			pLogBlk->PhyBlk1.PhyBlkNum = 0xffff;
+            pLogBlk->PhyBlk1.BlkEraseCnt = 0xffff;
+			pLogBlk->PhyBlk2.PhyBlkNum = 0xffff;
+            pLogBlk->PhyBlk2.BlkEraseCnt = 0xffff;
         }
 
         return -1;
@@ -306,7 +345,53 @@ __s32 BMM_GetLogBlk(__u32 nLogicBlk, struct __LogBlkType_t *pLogBlk)
     {
         if(pLogBlk != NULL)
         {
-            *pLogBlk = LOG_BLK_TBL[tmpLogPst];
+
+			if(SUPPORT_LOG_BLOCK_MANAGE)
+			{
+				LogBlkType = BMM_CalLogBlkType(nLogicBlk);
+				if(LOG_BLK_TBL[tmpLogPst].LogBlkType == 0xffff)
+				{
+					PRINT("[DBUG] find a log table item with valid log block type!\n");
+					LOG_BLK_TBL[tmpLogPst].LogBlkType = 0;
+					LOG_BLK_TBL[tmpLogPst].WriteBlkIndex = 0;
+					LOG_BLK_TBL[tmpLogPst].ReadBlkIndex = 0;
+				}
+
+	        	//check log type for debug
+				if(LOG_BLK_TBL[tmpLogPst].LogBlkType != LogBlkType)
+				{
+					PRINT("[DBUG] LogBlkTye mismatch: 0x%x, 0x%x\n",LOG_BLK_TBL[tmpLogPst].LogBlkType, LogBlkType);
+					if((LOG_BLK_TBL[tmpLogPst].LogBlkType == NORMAL_TYPE)&&(LogBlkType == LSB_TYPE))
+					{
+						//get a free block to create a new log block
+					    result = BMM_GetFreeBlk(LOWEST_EC_TYPE, &tmpFreeBlk1);
+					    if(result < 0)
+					    {
+					        MAPPING_ERR("[MAPPING_ERR] Get free block failed when create new log block!\n");
+					        return -1;
+					    }
+
+					    //make a new log item in the log block table
+						LOG_BLK_TBL[tmpLogPst].LogBlkType = LogBlkType;
+						LOG_BLK_TBL[tmpLogPst].WriteBlkIndex = 0;
+						LOG_BLK_TBL[tmpLogPst].ReadBlkIndex = 0;
+						LOG_BLK_TBL[tmpLogPst].PhyBlk1.PhyBlkNum = tmpFreeBlk1.PhyBlkNum;
+						LOG_BLK_TBL[tmpLogPst].PhyBlk1.BlkEraseCnt = tmpFreeBlk1.BlkEraseCnt;
+
+						*pLogBlk = LOG_BLK_TBL[tmpLogPst];
+
+					}
+
+				}
+				else
+				{
+                	*pLogBlk = LOG_BLK_TBL[tmpLogPst];
+				}
+			}
+			else
+			{
+            	*pLogBlk = LOG_BLK_TBL[tmpLogPst];
+			}
         }
     }
 
@@ -350,6 +435,36 @@ __s32 BMM_SetLogBlk(__u32 nLogicBlk, struct __LogBlkType_t *pLogBlk)
     return 0;
 }
 
+__s32 BMM_CalLogBlkType(__u32 nBlk)
+{
+	__u32 i;
+	__u32 log_block_type = 0;
+
+	if(!SUPPORT_LOG_BLOCK_MANAGE)
+		return NORMAL_TYPE;
+	else
+	{
+		//DBUG_MSG("[DBUG_MSG] BMM_CalLogBlkType, select bak log block\n");
+
+		for(i=0;i<NAND_MAX_PART_CNT;i++)
+		{
+			if(NandPartInfo[i].PartType == 0xffff)
+				break;
+
+			if((NandPartInfo[i].PartStartLogicBlk<= nBlk)&&(NandPartInfo[i].PartEndLogicBlk> nBlk))
+			{
+				log_block_type = NandPartInfo[i].PartType;
+			}
+		}
+
+		if((log_block_type != NORMAL_TYPE)&&(log_block_type != LSB_TYPE))
+			log_block_type = NORMAL_TYPE;
+
+		//DBUG_MSG("BMM_CalLogBlkType, Blk: 0x%x, Type: 0x%x\n", nBlk, log_block_type);
+		return log_block_type;
+	}
+
+}
 
 /*
 ************************************************************************************************************************
@@ -367,9 +482,9 @@ __s32 BMM_SetLogBlk(__u32 nLogicBlk, struct __LogBlkType_t *pLogBlk)
 */
 static __s32 _CreateNewLogBlk(__u32 nBlk, __u32 *pLogPst)
 {
-    __s32   i, result, tmpPst=-1;
+    __s32   i, result, LogBlkType,tmpPst=-1;
     __u16   tmpLogAccessAge = 0xffff;
-    struct __SuperPhyBlkType_t tmpFreeBlk;
+    struct __SuperPhyBlkType_t tmpFreeBlk, tmpFreeBlk1;
     struct __PhysicOpPara_t tmpPhyPage;
     struct __NandUserData_t tmpSpare[2];
 
@@ -437,20 +552,62 @@ static __s32 _CreateNewLogBlk(__u32 nBlk, __u32 *pLogPst)
         }
     }
 
-    //get a free block to create a new log block
-    result = BMM_GetFreeBlk(LOWEST_EC_TYPE, &tmpFreeBlk);
-    if(result < 0)
-    {
-        MAPPING_ERR("[MAPPING_ERR] Get free block failed when create new log block!\n");
-        return -1;
-    }
+	LogBlkType = BMM_CalLogBlkType(nBlk);
 
-    //make a new log item in the log block table
-    LOG_BLK_TBL[tmpPst].LogicBlkNum = nBlk;
-    LOG_BLK_TBL[tmpPst].LastUsedPage = 0xffff;
-    LOG_BLK_TBL[tmpPst].PhyBlk = tmpFreeBlk;
-    //set the return vaule of the log position
-    *pLogPst = tmpPst;
+	if((SUPPORT_LOG_BLOCK_MANAGE)&&(LogBlkType == LSB_TYPE))
+	{
+		DBUG_MSG("[DBUG_MSG] _CreateNewLogBlk, select bak log block\n");
+
+		//get a free block to create a new log block
+	    result = BMM_GetFreeBlk(LOWEST_EC_TYPE, &tmpFreeBlk);
+	    if(result < 0)
+	    {
+	        MAPPING_ERR("[MAPPING_ERR] Get free block failed when create new log block!\n");
+	        return -1;
+	    }
+
+		//get a free block to create a new log block
+	    result = BMM_GetFreeBlk(LOWEST_EC_TYPE, &tmpFreeBlk1);
+	    if(result < 0)
+	    {
+	        MAPPING_ERR("[MAPPING_ERR] Get free block failed when create new log block!\n");
+	        return -1;
+	    }
+
+		//DBUG_INF("[DBUG] _CreateNewLogBlk, logic: %x, logblk0: %x, logblk1:%x \n", nBlk, tmpFreeBlk.PhyBlkNum, tmpFreeBlk1.PhyBlkNum);
+
+	    //make a new log item in the log block table
+	    LOG_BLK_TBL[tmpPst].LogicBlkNum = nBlk;
+	    LOG_BLK_TBL[tmpPst].LastUsedPage = 0xffff;
+		LOG_BLK_TBL[tmpPst].LogBlkType = LogBlkType;
+		LOG_BLK_TBL[tmpPst].WriteBlkIndex = 0;
+		LOG_BLK_TBL[tmpPst].ReadBlkIndex = 0;
+	    LOG_BLK_TBL[tmpPst].PhyBlk = tmpFreeBlk;
+		LOG_BLK_TBL[tmpPst].PhyBlk1 = tmpFreeBlk1;
+	    //set the return vaule of the log position
+	    *pLogPst = tmpPst;
+	}
+	else
+	{
+	    //get a free block to create a new log block
+	    result = BMM_GetFreeBlk(LOWEST_EC_TYPE, &tmpFreeBlk);
+	    if(result < 0)
+	    {
+	        MAPPING_ERR("[MAPPING_ERR] Get free block failed when create new log block!\n");
+	        return -1;
+	    }
+
+	    //make a new log item in the log block table
+	    LOG_BLK_TBL[tmpPst].LogicBlkNum = nBlk;
+	    LOG_BLK_TBL[tmpPst].LastUsedPage = 0xffff;
+		LOG_BLK_TBL[tmpPst].LogBlkType = LogBlkType;
+		LOG_BLK_TBL[tmpPst].WriteBlkIndex = 0;
+		LOG_BLK_TBL[tmpPst].ReadBlkIndex = 0;
+	    LOG_BLK_TBL[tmpPst].PhyBlk = tmpFreeBlk;
+	    //set the return vaule of the log position
+	    *pLogPst = tmpPst;
+	}
+
 
 __CHECK_LOGICAL_INFO_OF_DATA_BLOCK:
     //check if the data block is an empty block, if so, need update the logic information in the spare area
@@ -523,7 +680,7 @@ __CHECK_LOGICAL_INFO_OF_DATA_BLOCK:
 static __s32 _GetLogPageForWrite(__u32 nBlk, __u32 nPage, __u16 *pLogPage, __u32 *pLogPst)
 {
     __s32   result, tmpLogPst;
-    __u16   tmpPage;
+    __u16   tmpPage, tempBank;
     struct __PhysicOpPara_t tmpPhyPage;
     struct __NandUserData_t tmpSpare[2];
 
@@ -550,7 +707,7 @@ static __s32 _GetLogPageForWrite(__u32 nBlk, __u32 nPage, __u16 *pLogPage, __u32
     //need get log page by write mode,
     tmpPage = LOG_BLK_TBL[tmpLogPst].LastUsedPage;
 
-    if(SUPPORT_ALIGN_NAND_BNK)
+	if(SUPPORT_ALIGN_NAND_BNK)
     {
         if(tmpPage == 0xffff)
         {
@@ -579,6 +736,37 @@ static __s32 _GetLogPageForWrite(__u32 nBlk, __u32 nPage, __u16 *pLogPage, __u32
         tmpPage = tmpPage + 1;
     }
 
+	if((SUPPORT_LOG_BLOCK_MANAGE)&&(LOG_BLK_TBL[tmpLogPst].LogBlkType == LSB_TYPE))
+	{
+		DBUG_MSG("[DBUG_MSG] _GetLogPageForWrite, select bak log block\n");
+
+		if(SUPPORT_ALIGN_NAND_BNK)
+		{
+			tempBank = tmpPage%INTERLEAVE_BANK_CNT;
+			tmpPage =PMM_CalNextLogPage(tmpPage);
+			while(tmpPage%INTERLEAVE_BANK_CNT != tempBank)
+			{
+				tmpPage++;
+				tmpPage =PMM_CalNextLogPage(tmpPage);
+				if(tmpPage>=PAGE_CNT_OF_SUPER_BLK)
+					break;
+			}
+		}
+		else
+		{
+			tmpPage =PMM_CalNextLogPage(tmpPage);
+		}
+
+		if((tmpPage >= PAGE_CNT_OF_SUPER_BLK)&&(LOG_BLK_TBL[tmpLogPst].WriteBlkIndex == 0))
+		{
+			LOG_BLK_TBL[tmpLogPst].WriteBlkIndex = 1;
+			tmpPage = tmpPage - PAGE_CNT_OF_SUPER_BLK;
+		}
+		if(LOG_BLK_TBL[tmpLogPst].WriteBlkIndex == 1)
+			DBUG_MSG("[DBUG_MSG] _GetLogPageForWrite, log block index: %x, log block num: %x, page: %x \n", LOG_BLK_TBL[tmpLogPst].WriteBlkIndex, LOG_BLK_TBL[tmpLogPst].PhyBlk1.PhyBlkNum, tmpPage);
+		else
+			DBUG_MSG("[DBUG_MSG] _GetLogPageForWrite, log block index: %x, log block num: %x, page: %x \n", LOG_BLK_TBL[tmpLogPst].WriteBlkIndex, LOG_BLK_TBL[tmpLogPst].PhyBlk.PhyBlkNum, tmpPage);
+	}
 
 __CHECK_WRITE_LOGICAL_INFO_OF_LOG_BLOCK:
     //check if need write the logical information in the first page of the log block
@@ -591,6 +779,11 @@ __CHECK_WRITE_LOGICAL_INFO_OF_LOG_BLOCK:
         tmpPhyPage.SDataPtr = (void *)tmpSpare;
         LML_VirtualPageRead(&tmpPhyPage);
 
+		//if((SUPPORT_LOG_BLOCK_MANAGE)&&(LOG_BLK_TBL[tmpLogPst].LogBlkType == LSB_TYPE))
+		//{
+		//	PRINT("_GetLogPageForWrite log %x page 0, data age: %x, log age: %x\n", LOG_BLK_TBL[tmpLogPst].WriteBlkIndex, tmpSpare[0].PageStatus, tmpSpare[0].PageStatus+1);
+		//}
+
         tmpSpare[0].BadBlkFlag = 0xff;
         tmpSpare[1].BadBlkFlag = 0xff;
         tmpSpare[0].LogicInfo = ((CUR_MAP_ZONE % ZONE_CNT_OF_DIE)<<10) | nBlk;
@@ -599,10 +792,27 @@ __CHECK_WRITE_LOGICAL_INFO_OF_LOG_BLOCK:
         tmpSpare[1].LogicPageNum = 0xffff;
         tmpSpare[0].PageStatus =  tmpSpare[0].PageStatus + 1;
         tmpSpare[1].PageStatus = tmpSpare[0].PageStatus;
+		if((SUPPORT_LOG_BLOCK_MANAGE)&&(LOG_BLK_TBL[tmpLogPst].LogBlkType == LSB_TYPE))
+		{
+			tmpSpare[0].LogType = LSB_TYPE|(LOG_BLK_TBL[tmpLogPst].WriteBlkIndex<<4);
+			tmpSpare[1].LogType = LSB_TYPE|(LOG_BLK_TBL[tmpLogPst].WriteBlkIndex<<4);
+		}
+		else
+		{
+			tmpSpare[0].LogType = 0xff;
+			tmpSpare[1].LogType = 0xff;
+		}
 
        //write the logical information to the spare area of the data block
-        LML_CalculatePhyOpPar(&tmpPhyPage, CUR_MAP_ZONE, LOG_BLK_TBL[tmpLogPst].PhyBlk.PhyBlkNum, 0);
-        tmpPhyPage.SectBitmap = FULL_BITMAP_OF_SUPER_PAGE;
+       	if((SUPPORT_LOG_BLOCK_MANAGE)&&(LOG_BLK_TBL[tmpLogPst].LogBlkType == LSB_TYPE))
+       	{
+       		DBUG_MSG("[DBUG] _GetLogPageForWrite, write the logical information to log page 0, writeblkindex: %x\n", LOG_BLK_TBL[tmpLogPst].WriteBlkIndex);
+       		LML_CalculatePhyOpPar(&tmpPhyPage, CUR_MAP_ZONE, LOG_BLK_TBL[tmpLogPst].PhyBlk.PhyBlkNum, 0);
+       	}
+		else
+        	LML_CalculatePhyOpPar(&tmpPhyPage, CUR_MAP_ZONE, LOG_BLK_TBL[tmpLogPst].PhyBlk.PhyBlkNum, 0);
+
+		tmpPhyPage.SectBitmap = FULL_BITMAP_OF_SUPER_PAGE;
         result = LML_VirtualPageWrite(&tmpPhyPage);
         if(result < 0)
         {
@@ -664,7 +874,7 @@ __CHECK_WRITE_LOGICAL_INFO_OF_LOG_BLOCK:
 __u32 PMM_GetLogPage(__u32 nBlk, __u32 nPage, __u8 nMode)
 {
     __s32   result, tmpLogPst;
-    __u16   tmpPage;
+    __u16   tmpPage, PhyPageNum;
 
     if(nMode == 'r')
     {
@@ -685,7 +895,25 @@ __u32 PMM_GetLogPage(__u32 nBlk, __u32 nPage, __u8 nMode)
 
         _CalLogAccessCnt(tmpLogPst);
 
-        return PAGE_MAP_TBL[nPage].PhyPageNum;
+		//get active read log block index
+		if((SUPPORT_LOG_BLOCK_MANAGE)&&(LOG_BLK_TBL[tmpLogPst].LogBlkType == LSB_TYPE))
+		{
+			PhyPageNum = PAGE_MAP_TBL[nPage].PhyPageNum;
+			if((PhyPageNum&(0x1<<15))&&(PhyPageNum!= 0xffff))
+			{
+				LOG_BLK_TBL[tmpLogPst].ReadBlkIndex = 1;
+				PhyPageNum &= 0x7fff;
+			}
+			else
+				LOG_BLK_TBL[tmpLogPst].ReadBlkIndex = 0;
+
+	        return (PhyPageNum|LOG_BLK_TBL[tmpLogPst].ReadBlkIndex<<16);
+		}
+		else
+		{
+			LOG_BLK_TBL[tmpLogPst].ReadBlkIndex = 0;
+			return PAGE_MAP_TBL[nPage].PhyPageNum;
+		}
     }
 
     result = _GetLogPageForWrite(nBlk, nPage, &tmpPage, (__u32 *)&tmpLogPst);
@@ -731,14 +959,23 @@ __u32 PMM_GetLogPage(__u32 nBlk, __u32 nPage, __u8 nMode)
     }
 
     //update the page mapping table item
-    PAGE_MAP_TBL[nPage].PhyPageNum = tmpPage;
+    if((SUPPORT_LOG_BLOCK_MANAGE)&&(LOG_BLK_TBL[tmpLogPst].LogBlkType == LSB_TYPE))
+    {
+    	DBUG_MSG("[DBUG_MSG] PMM_GetLogPage 2, select bak log block\n");
+    	PAGE_MAP_TBL[nPage].PhyPageNum = tmpPage|((LOG_BLK_TBL[tmpLogPst].WriteBlkIndex&0x1)<<15);
+    }
+	else
+		PAGE_MAP_TBL[nPage].PhyPageNum = tmpPage;
 
     //set the flag that mark need update the page mapping table
     PAGE_MAP_CACHE->DirtyFlag = 1;
 
     _CalLogAccessCnt(tmpLogPst);
 
-    return tmpPage;
+	if((SUPPORT_LOG_BLOCK_MANAGE)&&(LOG_BLK_TBL[tmpLogPst].LogBlkType == LSB_TYPE))
+		return (tmpPage|LOG_BLK_TBL[tmpLogPst].WriteBlkIndex<<16);
+	else
+    	return tmpPage;
 }
 
 

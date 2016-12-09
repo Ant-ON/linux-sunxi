@@ -1,23 +1,9 @@
 /*
- * drivers/block/sunxi_nand/src/include/nand_logic.h
+ * Copyright (C) 2013 Allwinnertech, kevin.z.m <kevin@allwinnertech.com>
  *
- * (C) Copyright 2007-2012
- * Allwinner Technology Co., Ltd. <www.allwinnertech.com>
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License as
- * published by the Free Software Foundation; either version 2 of
- * the License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.	 See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston,
- * MA 02111-1307 USA
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
  */
 
 #ifndef __NAND_LOGIC_H__
@@ -119,6 +105,7 @@
 //define the type of merger operation
 #define NORMAL_MERGE_MODE       0x00                //normal merge mode, there is not enough log item
 #define SPECIAL_MERGE_MODE      0x01                //special merge mode, there is not enough log page
+#define LOGTYPE_REPAIR_MERGE_MODE  0x02
 
 //define the invalid page number
 #define INVALID_PAGE_NUM        0xffff
@@ -232,7 +219,7 @@ __s32 LML_FlushPageCache(void);
 *               < 0     read failed.
 ************************************************************************************************************************
 */
-__s32 LML_PageRead(__u32 nPage, __u32 nBitmap, void* pBuf);
+__s32 LML_PageRead(__u32 nPage, __u64 nBitmap, void* pBuf);
 
 
 /*
@@ -251,7 +238,7 @@ __s32 LML_PageRead(__u32 nPage, __u32 nBitmap, void* pBuf);
 *               < 0     write failed.
 ************************************************************************************************************************
 */
-__s32 LML_PageWrite(__u32 nPage, __u32 nBitmap, void* pBuf);
+__s32 LML_PageWrite(__u32 nPage, __u64 nBitmap, void* pBuf);
 
 
 /*
@@ -451,7 +438,8 @@ __s32 BMM_SwitchMapTbl(__u32 nZone);
 ************************************************************************************************************************
 */
 __s32 BMM_WriteBackAllMapTbl(void);
-
+__s32 BMM_MergeAllLogBlock(void);
+__s32 BMM_RleaseLogBlock(__u32 log_level);
 
 /*
 ************************************************************************************************************************
@@ -551,14 +539,17 @@ __s32 BMM_SetFreeBlk(struct __SuperPhyBlkType_t *pFreeBlk);
 __s32 BMM_GetLogBlk(__u32 nLogicBlk, struct __LogBlkType_t *pLogBlk);
 __s32 BMM_SetLogBlk(__u32 nLogicBlk, struct __LogBlkType_t *pLogBlk);
 __u32 PMM_GetLogPage(__u32 nBlk, __u32 nPage, __u8 nMode);
+__s32 BMM_CalLogBlkType(__u32 nBlk);
 void PMM_ClearCurMapTbl(void);
 __u32 PMM_GetCurMapPage(__u16 nLogicalPage);
 void PMM_SetCurMapPage(__u16 nLogicalPage,__u16 nPhysicPage);
+__u32 PMM_CalNextLogPage(__u32 current_page);
 __s32 LML_VirtualBlkErase(__u32 nZone, __u32 nSuperBlk);
 __s32 LML_VirtualPageWrite( struct __PhysicOpPara_t *pVirtualPage);
 __s32 LML_VirtualPageRead(struct __PhysicOpPara_t *pVirtualPage);
 
 __s32 NAND_CacheFlush(void);
+__s32 NAND_CacheFlushDev(__u32 dev_num);
 __s32 NAND_CacheRead(__u32 blk, __u32 nblk, void *buf);
 __s32 NAND_CacheWrite(__u32 blk, __u32 nblk, void *buf);
 __s32 NAND_CacheOpen(void);
@@ -567,6 +558,7 @@ __s32 NAND_CacheClose(void);
 
 // 2010-12-04 modified
 __u32 NAND_GetDiskSize(void);
+__s32 NAND_SetPartInfo(void *part_table);
 
 
 #endif  //ifndef __NAND_LOGIC_H__

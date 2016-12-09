@@ -1,23 +1,9 @@
 /*
- * drivers/block/sunxi_nand/src/logic/merge.c
+ * Copyright (C) 2013 Allwinnertech, kevin.z.m <kevin@allwinnertech.com>
  *
- * (C) Copyright 2007-2012
- * Allwinner Technology Co., Ltd. <www.allwinnertech.com>
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License as
- * published by the Free Software Foundation; either version 2 of
- * the License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.	 See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston,
- * MA 02111-1307 USA
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
  */
 
 #include "../include/nand_logic.h"
@@ -55,12 +41,37 @@ __s32 _copy_page0(__u32 SrcBlk,__u16 SrcDataPage,__u32 DstBlk,__u8 SeqPlus)
         return NAND_OP_FALSE;
     }
 
+	if((SeqPlus!=0)&&(SeqPlus!=1)&&(SeqPlus!=2))
+	{
+		PRINT("Error, invalid SeqPlus: %x \n", SeqPlus);
+		PRINT("copypage0, SeqPlus: %x, old_seq: %x, new_seq: %x\n", SeqPlus, seq, SeqPlus+seq);
+		PRINT("SrcBlk: %x, DstBlk: %x, SrcDataPage: %x \n", SrcBlk, DstBlk, SrcDataPage);
+		while(1);
+	}
+	else
+	{
+		//PRINT("copypage0, SeqPlus:%x, old_seq: %x, new_seq: %x\n", SeqPlus, seq, SeqPlus+seq);
+		//PRINT("SrcBlk: %x, DstBlk: %x, SrcDataPage: %x \n", SrcBlk, DstBlk, SrcDataPage);
+	}
+
     UserData[0].LogicInfo = LogicInfo;
     UserData[0].PageStatus = seq + SeqPlus;
+	if(SeqPlus) //copy to new data block
+	{
+		UserData[0].LogType = 0xff;
+		UserData[1].LogType = 0xff;
+	}
+	else //copy from log to log, move merge to log block0
+	{
+		UserData[0].LogType &= 0xf;
+		UserData[0].LogType &= 0xf;
+	}
+
     if (NAND_OP_TRUE != LML_VirtualPageWrite(&DstParam)){
         LOGICCTL_ERR("_copy_page0 : write err\n");
         return NAND_OP_FALSE;
     }
+
 
     return NAND_OP_TRUE;
 }
@@ -87,6 +98,12 @@ __s32  _log2data_swap_merge(__u32 nlogical)
     BMM_GetLogBlk(nlogical, &LogBlk);
     LastUsedPage = LogBlk.LastUsedPage;
 
+	if((SUPPORT_LOG_BLOCK_MANAGE)&&(LogBlk.LogBlkType == LSB_TYPE))
+	{
+		 LOGICCTL_ERR("swap merge : LSB type not support swap merge\n");
+         return NAND_OP_FALSE;
+	}
+
     /*copy data from data block to log block*/
     for (SuperPage = LastUsedPage + 1; SuperPage < PAGE_CNT_OF_SUPER_BLK; SuperPage++){
         /*set source and destinate address*/
@@ -111,6 +128,9 @@ __s32  _log2data_swap_merge(__u32 nlogical)
     BMM_SetDataBlk(nlogical, &LogBlk.PhyBlk);
     /*clear log block item*/
     MEMSET(&LogBlk, 0xff, sizeof(struct __LogBlkType_t));
+	LogBlk.LogBlkType = 0;
+	LogBlk.WriteBlkIndex = 0;
+	LogBlk.ReadBlkIndex = 0;
     BMM_SetLogBlk(nlogical, &LogBlk);
 
     /*erase data block*/
@@ -120,13 +140,12 @@ __s32  _log2data_swap_merge(__u32 nlogical)
             return NAND_OP_FALSE;
         }
     }
-	else {
-		/*move erased data block to free block*/
-		if (DataBlk.BlkEraseCnt < 0xffff)
-			DataBlk.BlkEraseCnt ++;
-		BMM_SetFreeBlk(&DataBlk);
+	else{
+	    /*move erased data block to free block*/
+	    if (DataBlk.BlkEraseCnt < 0xffff)
+	        DataBlk.BlkEraseCnt ++;
+	    BMM_SetFreeBlk(&DataBlk);
 	}
-
     /*clear page map table*/
     PMM_ClearCurMapTbl();
 
@@ -146,17 +165,25 @@ __s32  _free2log_move_merge(__u32 nlogical)
 {
     __u8 bank;
     __u16 LastUsedPage,SuperPage;
-    __u16 SrcPage,DstPage;
-    struct __SuperPhyBlkType_t FreeBlk;
+    __u16 SrcPage,DstPage, SrcBlock, DstBlock;
+    struct __SuperPhyBlkType_t FreeBlk,FreeBlk1;
     struct __LogBlkType_t LogBlk;
     struct __PhysicOpPara_t SrcParam,DstParam;
 	struct __NandUserData_t UserData[2];
 
-
     /*init info of log block , and get one free block */
     BMM_GetLogBlk(nlogical, &LogBlk);
+
     if (NAND_OP_TRUE != BMM_GetFreeBlk(LOWEST_EC_TYPE, &FreeBlk))
         return NAND_OP_FALSE;
+
+	if((SUPPORT_LOG_BLOCK_MANAGE)&&(LogBlk.LogBlkType == LSB_TYPE))
+	{
+		if (NAND_OP_TRUE != BMM_GetFreeBlk(LOWEST_EC_TYPE, &FreeBlk1))
+        	return NAND_OP_FALSE;
+		//DBUG_INF("[DBUG] lsb move merge, new log0: %x, new log1: %x\n", FreeBlk.PhyBlkNum, FreeBlk1.PhyBlkNum);
+	}
+
 
     SrcParam.MDataPtr = DstParam.MDataPtr = NULL;
     SrcParam.SDataPtr = DstParam.SDataPtr = NULL;
@@ -176,11 +203,43 @@ __s32  _free2log_move_merge(__u32 nlogical)
                 if (SrcPage != 0xffff)
                 {
                 	  /*set source and destinate address*/
-    		 		LML_CalculatePhyOpPar(&SrcParam,CUR_MAP_ZONE, LogBlk.PhyBlk.PhyBlkNum, SrcPage);
-                   	LML_CalculatePhyOpPar(&DstParam,CUR_MAP_ZONE, FreeBlk.PhyBlkNum, DstPage);
+	                if((SUPPORT_LOG_BLOCK_MANAGE)&&(LogBlk.LogBlkType == LSB_TYPE))
+					{
+						DBUG_MSG("[DBUG_MSG] _free2log_move_merge 2, select bak log block\n");
+						DstPage = PMM_CalNextLogPage(DstPage);
+						while((DstPage%INTERLEAVE_BANK_CNT)!=bank)
+						{
+							DstPage++;
+							DstPage = PMM_CalNextLogPage(DstPage);
+							if(DstPage>=PAGE_CNT_OF_SUPER_BLK)
+								break;
+						}
+
+						if(DstPage >= PAGE_CNT_OF_SUPER_BLK)
+						{
+							LOGICCTL_ERR("move merge : dst page cal error\n");
+							return NAND_OP_FALSE;
+						}
+
+						if(SrcPage&(0x1<<15))
+							SrcBlock = LogBlk.PhyBlk1.PhyBlkNum;
+						else
+							SrcBlock = LogBlk.PhyBlk.PhyBlkNum;
+						DstBlock = FreeBlk.PhyBlkNum;
+						SrcPage &= (~(0x1<<15));
+
+					}
+					else
+					{
+						SrcBlock = LogBlk.PhyBlk.PhyBlkNum;
+						DstBlock = FreeBlk.PhyBlkNum;
+					}
+
+    		 		LML_CalculatePhyOpPar(&SrcParam,CUR_MAP_ZONE, SrcBlock, SrcPage);
+                   	LML_CalculatePhyOpPar(&DstParam,CUR_MAP_ZONE, DstBlock, DstPage);
                     if (DstPage == 0)
                     {
-                        if ( NAND_OP_FALSE == _copy_page0(LogBlk.PhyBlk.PhyBlkNum,SrcPage,FreeBlk.PhyBlkNum,0))
+                        if ( NAND_OP_FALSE == _copy_page0(SrcBlock,SrcPage,FreeBlk.PhyBlkNum,0))
                         {
                             LOGICCTL_ERR("move merge : copy page 0 err1\n");
                             return NAND_OP_FALSE;
@@ -252,11 +311,35 @@ __s32  _free2log_move_merge(__u32 nlogical)
     		if (SrcPage != 0xffff)
     		{
     			/*set source and destinate address*/
-    		 	LML_CalculatePhyOpPar(&SrcParam,CUR_MAP_ZONE, LogBlk.PhyBlk.PhyBlkNum, SrcPage);
-                LML_CalculatePhyOpPar(&DstParam,CUR_MAP_ZONE, FreeBlk.PhyBlkNum, DstPage);
+	            if((SUPPORT_LOG_BLOCK_MANAGE)&&(LogBlk.LogBlkType == LSB_TYPE))
+				{
+					DBUG_MSG("[DBUG_MSG] _free2log_move_merge 3, select bak log block\n");
+					DstPage = PMM_CalNextLogPage(DstPage);
+					if(DstPage >= PAGE_CNT_OF_SUPER_BLK)
+					{
+						LOGICCTL_ERR("move merge : dst page cal error\n");
+						return NAND_OP_FALSE;
+					}
+
+					if(SrcPage&(0x1<<15))
+						SrcBlock = LogBlk.PhyBlk1.PhyBlkNum;
+					else
+						SrcBlock = LogBlk.PhyBlk.PhyBlkNum;
+					DstBlock = FreeBlk.PhyBlkNum;
+					SrcPage &= 0x7fff;
+
+				}
+				else
+				{
+					SrcBlock = LogBlk.PhyBlk.PhyBlkNum;
+					DstBlock = FreeBlk.PhyBlkNum;
+				}
+
+    		 	LML_CalculatePhyOpPar(&SrcParam,CUR_MAP_ZONE, SrcBlock, SrcPage);
+                LML_CalculatePhyOpPar(&DstParam,CUR_MAP_ZONE, DstBlock, DstPage);
     			if (0 == DstPage)
     			{
-    				if ( NAND_OP_FALSE == _copy_page0(LogBlk.PhyBlk.PhyBlkNum,SrcPage,FreeBlk.PhyBlkNum,0))
+    				if ( NAND_OP_FALSE == _copy_page0(SrcBlock,SrcPage,FreeBlk.PhyBlkNum,0))
                     {
                          LOGICCTL_ERR("move merge : copy page 0 err1\n");
                          return NAND_OP_FALSE;
@@ -306,19 +389,61 @@ __s32  _free2log_move_merge(__u32 nlogical)
             return NAND_OP_FALSE;
         }
     }
-	else {
+	else{
 		/*move erased log block to free block*/
-		if(LogBlk.PhyBlk.BlkEraseCnt < 0xffff)
-		{
-			LogBlk.PhyBlk.BlkEraseCnt ++;
+	    if(LogBlk.PhyBlk.BlkEraseCnt < 0xffff)
+	    {
+	        LogBlk.PhyBlk.BlkEraseCnt ++;
+	    }
+	    BMM_SetFreeBlk(&LogBlk.PhyBlk);
+	}
+	if((SUPPORT_LOG_BLOCK_MANAGE)&&(LogBlk.LogBlkType == LSB_TYPE))
+	{
+		//DBUG_INF("[DBUG] logic %x move merge: erase log block 0: %x\n", LogBlk.LogicBlkNum, LogBlk.PhyBlk.PhyBlkNum);
+		if(NAND_OP_TRUE != LML_VirtualBlkErase(CUR_MAP_ZONE, LogBlk.PhyBlk1.PhyBlkNum))
+	    {
+	        if(NAND_OP_TRUE != LML_BadBlkManage(&LogBlk.PhyBlk1,CUR_MAP_ZONE,0,NULL))
+	        {
+	            LOGICCTL_ERR("move merge : bad block manage err after erase log block\n");
+	            return NAND_OP_FALSE;
+	        }
+	    }
+		else{
+			/*move erased log block to free block*/
+		    if(LogBlk.PhyBlk1.BlkEraseCnt < 0xffff)
+		    {
+		        LogBlk.PhyBlk1.BlkEraseCnt ++;
+		    }
+		    BMM_SetFreeBlk(&LogBlk.PhyBlk1);
 		}
-		BMM_SetFreeBlk(&LogBlk.PhyBlk);
-    }
+		//DBUG_INF("[DBUG] logic %x move merge: erase log block 1: %x\n", LogBlk.LogicBlkNum, LogBlk.PhyBlk1.PhyBlkNum);
+	}
+
 
     /*move free block to log block*/
-    LogBlk.PhyBlk = FreeBlk;
-    LogBlk.LastUsedPage = LastUsedPage;
+    LogBlk.PhyBlk.PhyBlkNum= FreeBlk.PhyBlkNum;
+	LogBlk.PhyBlk.BlkEraseCnt= FreeBlk.BlkEraseCnt;
+	if((SUPPORT_LOG_BLOCK_MANAGE)&&(LogBlk.LogBlkType == LSB_TYPE))
+	{
+		DBUG_MSG("[DBUG_MSG] _free2log_move_merge 4, select bak log block\n");
+		LogBlk.PhyBlk1.PhyBlkNum= FreeBlk1.PhyBlkNum;
+	    LogBlk.PhyBlk1.BlkEraseCnt= FreeBlk1.BlkEraseCnt;
+	    LogBlk.WriteBlkIndex = 0;
+	    LogBlk.ReadBlkIndex = 0;
+		DBUG_MSG("[DBUG] move merge to new log block, logic block: %x, logblock0: %x, logblock1: %x\n", LogBlk.LogicBlkNum, LogBlk.PhyBlk.PhyBlkNum, LogBlk.PhyBlk1.PhyBlkNum);
+
+	}
+	else
+	{
+		LogBlk.LogBlkType = 0;
+		LogBlk.WriteBlkIndex = 0;
+	    LogBlk.ReadBlkIndex = 0;
+	}
+	LogBlk.LastUsedPage = LastUsedPage;
     BMM_SetLogBlk(nlogical, &LogBlk);
+
+	//if((SUPPORT_LOG_BLOCK_MANAGE)&&(LogBlk.LogBlkType == LSB_TYPE))
+	//	DBUG_INF("logic %x move merge, lastusedpage: %x\n", LogBlk.LogicBlkNum, LogBlk.LastUsedPage);
 
     return NAND_OP_TRUE;
 }
@@ -346,98 +471,216 @@ __s32  _free2data_simple_merge(__u32 nlogical)
 
     /*init block info*/
     BMM_GetDataBlk(nlogical,&DataBlk);
+	BMM_GetLogBlk(nlogical,&LogBlk);
     if (NAND_OP_TRUE != BMM_GetFreeBlk(LOWEST_EC_TYPE, &FreeBlk))
         return NAND_OP_FALSE;
-    BMM_GetLogBlk(nlogical,&LogBlk);
+
 
     /*copy data from data block or log block to free block*/
-    for (SuperPage = 0; SuperPage < PAGE_CNT_OF_LOGIC_BLK; SuperPage++)
-    {
-        /*set source address and destination address*/
-        DstPage = SuperPage;
-        DstBlk = FreeBlk.PhyBlkNum;
-        SrcPage = PMM_GetCurMapPage(SuperPage);
-        InData = (SrcPage == 0xffff)?1 : 0;
-        SrcBlk = InData?DataBlk.PhyBlkNum : LogBlk.PhyBlk.PhyBlkNum;
-        SrcPage = InData?SuperPage:SrcPage;
-		LML_CalculatePhyOpPar(&SrcParam, CUR_MAP_ZONE,SrcBlk, SrcPage);
-		LML_CalculatePhyOpPar(&DstParam, CUR_MAP_ZONE,DstBlk, DstPage);
+	if((SUPPORT_LOG_BLOCK_MANAGE)&&(LogBlk.LogBlkType == LSB_TYPE))
+	{
+		//DBUG_INF("[DBUG] nand lsb type simple merge block %x\n", nlogical);
+		for (SuperPage = 0; SuperPage < PAGE_CNT_OF_LOGIC_BLK; SuperPage++)
+	    {
+	        /*set source address and destination address*/
+	        DstPage = SuperPage;
+	        DstBlk = FreeBlk.PhyBlkNum;
+	        SrcPage = PMM_GetCurMapPage(SuperPage);
+	        InData = (SrcPage == 0xffff)?1 : 0;
+			if(InData)
+			{
+				SrcBlk = DataBlk.PhyBlkNum;
+			}
+			else
+			{
+				if(SrcPage&(0x1<<15))
+					SrcBlk = LogBlk.PhyBlk1.PhyBlkNum;
+				else
+					SrcBlk = LogBlk.PhyBlk.PhyBlkNum;
+			}
+	        SrcPage = InData?SuperPage:(SrcPage&0x7fff);
+			LML_CalculatePhyOpPar(&SrcParam, CUR_MAP_ZONE,SrcBlk, SrcPage);
+			LML_CalculatePhyOpPar(&DstParam, CUR_MAP_ZONE,DstBlk, DstPage);
 
-        if (DstPage == 0)
-        {
-            __u8 SeqPlus;
-            //SeqPlus = InData?1:0;
-            SeqPlus = InData?2:1;
-            if(NAND_OP_FALSE == _copy_page0(SrcBlk, SrcPage, DstBlk,SeqPlus))
-            {
-                LOGICCTL_ERR("simple_merge : copy page 0 err\n");
-                return NAND_OP_FALSE;
-            }
-        }
-        else
-        {
-            if(NAND_OP_TRUE != PHY_PageCopyback(&SrcParam,&DstParam))
-            {
-                LOGICCTL_ERR("simple merge : copy back err\n");
-                return NAND_OP_FALSE;
-            }
-        }
+	        if (DstPage == 0)
+	        {
+	            __u8 SeqPlus;
+	            //SeqPlus = InData?1:0;
+	            SeqPlus = InData?2:1;
+	            if(NAND_OP_FALSE == _copy_page0(SrcBlk, SrcPage, DstBlk,SeqPlus))
+	            {
+	                LOGICCTL_ERR("simple_merge : copy page 0 err\n");
+	                return NAND_OP_FALSE;
+	            }
+	        }
+	        else
+	        {
+	            if(NAND_OP_TRUE != PHY_PageCopyback(&SrcParam,&DstParam))
+	            {
+	                LOGICCTL_ERR("simple merge : copy back err\n");
+	                return NAND_OP_FALSE;
+	            }
+	        }
 
-        if(NAND_OP_TRUE != PHY_SynchBank(DstParam.BankNum, SYNC_BANK_MODE))
-        {
-            struct __SuperPhyBlkType_t SubBlk;
-            if(NAND_OP_TRUE != LML_BadBlkManage(&FreeBlk,CUR_MAP_ZONE,DstPage, &SubBlk))
-            {
-                LOGICCTL_ERR("simgple merge : bad block manage err after copy back\n");
-                return NAND_OP_FALSE;
-            }
-            FreeBlk = SubBlk;
-            SuperPage -= 1;
-        }
-    }
+	        if(NAND_OP_TRUE != PHY_SynchBank(DstParam.BankNum, SYNC_BANK_MODE))
+	        {
+	            struct __SuperPhyBlkType_t SubBlk;
+	            if(NAND_OP_TRUE != LML_BadBlkManage(&FreeBlk,CUR_MAP_ZONE,DstPage, &SubBlk))
+	            {
+	                LOGICCTL_ERR("simgple merge : bad block manage err after copy back\n");
+	                return NAND_OP_FALSE;
+	            }
+	            FreeBlk = SubBlk;
+	            SuperPage -= 1;
+	        }
+	    }
 
-    /*move free block to data block*/
-    BMM_SetDataBlk(nlogical, &FreeBlk);
+	    /*move free block to data block*/
+	    BMM_SetDataBlk(nlogical, &FreeBlk);
 
 
-	/*move erased data block to free block*/
-    if ( NAND_OP_TRUE != LML_VirtualBlkErase(CUR_MAP_ZONE, DataBlk.PhyBlkNum)){
-        if (NAND_OP_TRUE != LML_BadBlkManage(&DataBlk,CUR_MAP_ZONE,0,NULL)){
-            LOGICCTL_ERR("swap merge : bad block manage err erase data block\n");
-            return NAND_OP_FALSE;
-        }
-    }
-	else {
 		/*move erased data block to free block*/
-		if (DataBlk.BlkEraseCnt < 0xffff)
-			DataBlk.BlkEraseCnt ++;
-		BMM_SetFreeBlk(&DataBlk);
+	    if ( NAND_OP_TRUE != LML_VirtualBlkErase(CUR_MAP_ZONE, DataBlk.PhyBlkNum)){
+	        if (NAND_OP_TRUE != LML_BadBlkManage(&DataBlk,CUR_MAP_ZONE,0,NULL)){
+	            LOGICCTL_ERR("swap merge : bad block manage err erase data block\n");
+	            return NAND_OP_FALSE;
+	        }
+	    }
+		else{
+		    /*move erased data block to free block*/
+		    if (DataBlk.BlkEraseCnt < 0xffff)
+		        DataBlk.BlkEraseCnt ++;
+		    BMM_SetFreeBlk(&DataBlk);
+			//DBUG_INF("[DBUG] logic %x simple merge: erase data block: %x\n", LogBlk.LogicBlkNum, DataBlk.PhyBlkNum);
+		}
+	    /*move erased log block to free block*/
+	    if ( NAND_OP_TRUE != LML_VirtualBlkErase(CUR_MAP_ZONE, LogBlk.PhyBlk.PhyBlkNum)){
+	        if (NAND_OP_TRUE != LML_BadBlkManage(&LogBlk.PhyBlk,CUR_MAP_ZONE,0,NULL)){
+	            LOGICCTL_ERR("simple merge : bad block manage err after erase log block\n");
+	            return NAND_OP_FALSE;
+	        }
+	    }
+		else{
+		    if (LogBlk.PhyBlk.BlkEraseCnt < 0xffff)
+		        LogBlk.PhyBlk.BlkEraseCnt ++;
+		    BMM_SetFreeBlk(&LogBlk.PhyBlk);
+			//DBUG_INF("[DBUG] logic %x simple merge: erase log block 0: %x\n", LogBlk.LogicBlkNum, LogBlk.PhyBlk.PhyBlkNum);
+		}
+		 /*move erased log block to free block*/
+
+		if ( NAND_OP_TRUE != LML_VirtualBlkErase(CUR_MAP_ZONE, LogBlk.PhyBlk1.PhyBlkNum)){
+	        if (NAND_OP_TRUE != LML_BadBlkManage(&LogBlk.PhyBlk1,CUR_MAP_ZONE,0,NULL)){
+	            LOGICCTL_ERR("simple merge : bad block manage err after erase log block\n");
+	            return NAND_OP_FALSE;
+	        }
+	    }
+		else{
+		    if (LogBlk.PhyBlk1.BlkEraseCnt < 0xffff)
+		        LogBlk.PhyBlk1.BlkEraseCnt ++;
+		    BMM_SetFreeBlk(&LogBlk.PhyBlk1);
+			//DBUG_INF("[DBUG] logic %x simple merge: erase log block 1: %x\n", LogBlk.LogicBlkNum, LogBlk.PhyBlk1.PhyBlkNum);
+		}
+	    MEMSET(&LogBlk, 0xff, sizeof(struct __LogBlkType_t));
+		LogBlk.LogBlkType = 0;
+		LogBlk.WriteBlkIndex = 0;
+		LogBlk.ReadBlkIndex = 0;
+	    BMM_SetLogBlk(nlogical, &LogBlk);
+
+	    /*clear page map table*/
+	    PMM_ClearCurMapTbl();
+	}
+	else
+	{
+		for (SuperPage = 0; SuperPage < PAGE_CNT_OF_LOGIC_BLK; SuperPage++)
+	    {
+	        /*set source address and destination address*/
+	        DstPage = SuperPage;
+	        DstBlk = FreeBlk.PhyBlkNum;
+	        SrcPage = PMM_GetCurMapPage(SuperPage);
+	        InData = (SrcPage == 0xffff)?1 : 0;
+	        SrcBlk = InData?DataBlk.PhyBlkNum : LogBlk.PhyBlk.PhyBlkNum;
+	        SrcPage = InData?SuperPage:SrcPage;
+			LML_CalculatePhyOpPar(&SrcParam, CUR_MAP_ZONE,SrcBlk, SrcPage);
+			LML_CalculatePhyOpPar(&DstParam, CUR_MAP_ZONE,DstBlk, DstPage);
+
+	        if (DstPage == 0)
+	        {
+	            __u8 SeqPlus;
+	            //SeqPlus = InData?1:0;
+	            SeqPlus = InData?2:1;
+	            if(NAND_OP_FALSE == _copy_page0(SrcBlk, SrcPage, DstBlk,SeqPlus))
+	            {
+	                LOGICCTL_ERR("simple_merge : copy page 0 err\n");
+	                return NAND_OP_FALSE;
+	            }
+	        }
+	        else
+	        {
+	            if(NAND_OP_TRUE != PHY_PageCopyback(&SrcParam,&DstParam))
+	            {
+	                LOGICCTL_ERR("simple merge : copy back err\n");
+	                return NAND_OP_FALSE;
+	            }
+	        }
+
+	        if(NAND_OP_TRUE != PHY_SynchBank(DstParam.BankNum, SYNC_BANK_MODE))
+	        {
+	            struct __SuperPhyBlkType_t SubBlk;
+	            if(NAND_OP_TRUE != LML_BadBlkManage(&FreeBlk,CUR_MAP_ZONE,DstPage, &SubBlk))
+	            {
+	                LOGICCTL_ERR("simgple merge : bad block manage err after copy back\n");
+	                return NAND_OP_FALSE;
+	            }
+	            FreeBlk = SubBlk;
+	            SuperPage -= 1;
+	        }
+	    }
+
+	    /*move free block to data block*/
+	    BMM_SetDataBlk(nlogical, &FreeBlk);
+
+
+		/*move erased data block to free block*/
+	    if ( NAND_OP_TRUE != LML_VirtualBlkErase(CUR_MAP_ZONE, DataBlk.PhyBlkNum)){
+	        if (NAND_OP_TRUE != LML_BadBlkManage(&DataBlk,CUR_MAP_ZONE,0,NULL)){
+	            LOGICCTL_ERR("swap merge : bad block manage err erase data block\n");
+	            return NAND_OP_FALSE;
+	        }
+	    }
+		else{
+		    /*move erased data block to free block*/
+		    if (DataBlk.BlkEraseCnt < 0xffff)
+		        DataBlk.BlkEraseCnt ++;
+		    BMM_SetFreeBlk(&DataBlk);
+		}
+
+	    /*move erased log block to free block*/
+	    if ( NAND_OP_TRUE != LML_VirtualBlkErase(CUR_MAP_ZONE, LogBlk.PhyBlk.PhyBlkNum)){
+	        if (NAND_OP_TRUE != LML_BadBlkManage(&LogBlk.PhyBlk,CUR_MAP_ZONE,0,NULL)){
+	            LOGICCTL_ERR("move merge : bad block manage err after erase log block\n");
+	            return NAND_OP_FALSE;
+	        }
+	    }
+		else{
+		    if (LogBlk.PhyBlk.BlkEraseCnt < 0xffff)
+		        LogBlk.PhyBlk.BlkEraseCnt ++;
+		    BMM_SetFreeBlk(&LogBlk.PhyBlk);
+		}
+	    MEMSET(&LogBlk, 0xff, sizeof(struct __LogBlkType_t));
+		LogBlk.LogBlkType = 0;
+		LogBlk.WriteBlkIndex = 0;
+		LogBlk.ReadBlkIndex = 0;
+	    BMM_SetLogBlk(nlogical, &LogBlk);
+
+	    /*clear page map table*/
+	    PMM_ClearCurMapTbl();
 	}
 
-
-    /*move erased log block to free block*/
-    if ( NAND_OP_TRUE != LML_VirtualBlkErase(CUR_MAP_ZONE, LogBlk.PhyBlk.PhyBlkNum)){
-        if (NAND_OP_TRUE != LML_BadBlkManage(&LogBlk.PhyBlk,CUR_MAP_ZONE,0,NULL)){
-            LOGICCTL_ERR("move merge : bad block manage err after erase log block\n");
-            return NAND_OP_FALSE;
-        }
-    }
-	else {
-		if (LogBlk.PhyBlk.BlkEraseCnt < 0xffff)
-			LogBlk.PhyBlk.BlkEraseCnt ++;
-		BMM_SetFreeBlk(&LogBlk.PhyBlk);
-	}
-    MEMSET(&LogBlk, 0xff, sizeof(struct __LogBlkType_t));
-    BMM_SetLogBlk(nlogical, &LogBlk);
-
-
-
-    /*clear page map table*/
-    PMM_ClearCurMapTbl();
 
     return NAND_OP_TRUE;
 
 }
+
 
 void _get_page_map_tbl_info(__u32 nlogical,__u8 *InOrder, __u16 *nValidPage)
 {
@@ -449,6 +692,12 @@ void _get_page_map_tbl_info(__u32 nlogical,__u8 *InOrder, __u16 *nValidPage)
     *nValidPage = 0;
     BMM_GetLogBlk(nlogical, &LogBlk);
     LastUsedPage = LogBlk.LastUsedPage;
+
+	if((SUPPORT_LOG_BLOCK_MANAGE)&&(LogBlk.LogBlkType == LSB_TYPE))
+	{
+		DBUG_MSG("[DBUG_MSG] _get_page_map_tbl_info, select bak log block\n");
+		*InOrder = 0;
+	}
 
     for (i = 0; i < PAGE_CNT_OF_SUPER_BLK; i++)
     {
@@ -483,17 +732,30 @@ __s32 LML_MergeLogBlk(__u32 nMode, __u32 nlogical)
 {
     __u8 InOrder;
     __u16 nValidPage;
+	__s32 ret;
 
     _get_page_map_tbl_info(nlogical,&InOrder,&nValidPage);
 
     if (InOrder)
-        return (_log2data_swap_merge(nlogical));
+    {
+    	//DBUG_INF("--%x swap--\n", nlogical);
+    	ret = (_log2data_swap_merge(nlogical));
+    }
     else{
         if ( (nMode == SPECIAL_MERGE_MODE) && (nValidPage < PAGE_CNT_OF_SUPER_BLK/(INTERLEAVE_BANK_CNT+1)))
-            return (_free2log_move_merge(nlogical));
+        {
+        	//DBUG_INF("--%x move--\n", nlogical);
+        	ret =  (_free2log_move_merge(nlogical));
+        }
         else
-            return (_free2data_simple_merge(nlogical));
+        {
+        	//DBUG_INF("--%x simple--\n", nlogical);
+			ret =  (_free2data_simple_merge(nlogical));
+        }
     }
+
+	//DBUG_INF("--%x merge end--\n", nlogical);
+	return ret;
 
 }
 

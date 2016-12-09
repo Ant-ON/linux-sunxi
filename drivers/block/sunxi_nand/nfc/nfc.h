@@ -1,23 +1,9 @@
 /*
- * drivers/block/sunxi_nand/nfc/nfc.h
+ * Copyright (C) 2013 Allwinnertech, kevin.z.m <kevin@allwinnertech.com>
  *
- * (C) Copyright 2007-2012
- * Allwinner Technology Co., Ltd. <www.allwinnertech.com>
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License as
- * published by the Free Software Foundation; either version 2 of
- * the License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.	 See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston,
- * MA 02111-1307 USA
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
  */
 
 #ifndef _NFC_H_
@@ -25,7 +11,10 @@
 
 #include <mach/platform.h>
 
-#define NAND_IO_BASE		SW_VA_NANDFLASHC_IO_BASE
+#define NAND_IO_BASE_ADDR		(0xf1c03000)
+
+extern __u32 nand_io_base;
+#define NAND_IO_BASE    (nand_io_base)
 #define __NFC_REG(x)    (*(volatile unsigned int   *)(NAND_IO_BASE + x))
 /*
 *********************************************************************************************************
@@ -194,9 +183,8 @@ typedef struct NFC_init_info{
 
 __s32 NFC_ReadRetryInit(__u32 read_retry_type);
 __s32 NFC_ReadRetryExit(__u32 read_retry_type);
-__s32 NFC_ReadRetry_off(__u32 chip); //sandisk readretry exit
-void NFC_GetOTPValue(__u32 chip, __u8* otp_value, __u32 read_retry_type);
 __s32 NFC_GetDefaultParam(__u32 chip, __u8 *defautl_value, __u32 read_retry_type);
+void NFC_GetOTPValue(__u32 chip, __u8* otp_value, __u32 read_retry_type);
 __s32 NFC_SetDefaultParam(__u32 chip, __u8 *defautl_value, __u32 read_retry_type);
 __s32 NFC_ReadRetry(__u32 chip, __u32 retry_count, __u32 read_retry_type);
 __s32 NFC_LSBEnable(__u32 chip, __u32 read_retry_type);
@@ -229,9 +217,36 @@ __s32 NFC_CheckRbReady(__u32 rb);
 __s32 NFC_ChangMode(NFC_INIT_INFO * nand_info);
 __s32 NFC_SetEccMode(__u8 ecc_mode);
 __s32 NFC_ResetChip(NFC_CMD_LIST * reset_cmd);
+__s32 NFC_ReadRetry_off(__u32 chip); //sandisk readretry exit
 __u32 NFC_QueryINT(void);
 void NFC_EnableInt(__u8 minor_int);
 void NFC_DisableInt(__u8 minor_int);
 void NFC_InitDDRParam(__u32 chip, __u32 param);
+__s32 NFC_ReadRetry_0x32_UpperPage(void);
+
+#define NFC_READ_REG(reg)   		(reg)
+#define NFC_WRITE_REG(reg,data) 	(reg) = (data)
+
+#define ERR_ECC 	12
+#define ECC_LIMIT 	10
+#define ERR_TIMEOUT 14
+#define READ_RETRY_MAX_TYPE_NUM 5
+#define READ_RETRY_MAX_REG_NUM	16
+#define READ_RETRY_MAX_CYCLE	20
+#define LSB_MODE_MAX_REG_NUM	8
+
+/* define various unit data input or output*/
+#define NFC_READ_RAM_B(ram)    		(*((volatile __u8 *)(NAND_IO_BASE + ram)))
+#define NFC_WRITE_RAM_B(ram,data)  	(*((volatile __u8 *)(NAND_IO_BASE + ram)) = (data))
+#define NFC_READ_RAM_HW(ram)   		(*((volatile __u16 *)(NAND_IO_BASE + ram)))
+#define NFC_WRITE_RAM_HW(ram,data) 	(*((volatile __u16 *)(NAND_IO_BASE + ram)) = (data))
+#define NFC_READ_RAM_W(ram)   		(*((volatile __u32 *)(NAND_IO_BASE + ram)))
+#define NFC_WRITE_RAM_W(ram,data) 	(*((volatile __u32 *)(NAND_IO_BASE + ram)) = (data))
+
+#ifdef USE_PHYSICAL_ADDRESS
+#define NFC_IS_SDRAM(addr)			((addr >= DRAM_BASE)?1:0)
+#else
+#define NFC_IS_SDRAM(addr)			( ((addr >= DRAM_BASE))&&(addr < SRAM_BASE)?1:0)
+#endif
 
 #endif    // #ifndef _NFC_H_

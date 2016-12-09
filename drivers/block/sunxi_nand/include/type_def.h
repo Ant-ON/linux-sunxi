@@ -23,7 +23,6 @@
 #ifndef TYPE_DEF_H
 #define TYPE_DEF_H
 
-//#include "sunii.h"
 #include <linux/kernel.h>
 
 //typedef signed char s8;
@@ -51,9 +50,5 @@
 //typedef unsigned long __u64;
 
   typedef unsigned int __hdle;
-
-#define EPDK_OK 0
-#define EPDK_FAIL -1
-
 
 #endif

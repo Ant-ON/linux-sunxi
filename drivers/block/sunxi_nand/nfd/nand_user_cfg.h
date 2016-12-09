@@ -23,8 +23,10 @@
 #ifndef	__NAND_SYS_CFG__
 #define	__NAND_SYS_CFG__
 
-#define OS_KERNEL
+#define __OS_LINUX_SYSTEM__
 
-//#define NAND_CACHE_RW
+#define __OS_SUPPORT_RB_INT__
+
+//#define __OS_NAND_DBG__
 
 #endif

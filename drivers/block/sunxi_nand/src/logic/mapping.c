@@ -1,31 +1,19 @@
 /*
- * drivers/block/sunxi_nand/src/logic/mapping.c
+ * Copyright (C) 2013 Allwinnertech, kevin.z.m <kevin@allwinnertech.com>
  *
- * (C) Copyright 2007-2012
- * Allwinner Technology Co., Ltd. <www.allwinnertech.com>
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License as
- * published by the Free Software Foundation; either version 2 of
- * the License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.	 See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston,
- * MA 02111-1307 USA
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
  */
+
 
 #include "../include/nand_logic.h"
 
 extern struct __NandDriverGlobal_t     NandDriverInfo;
+extern __u32 DieCntOfNand;
 
-struct __BlkMapTblCachePool_t BlkMapTblCachePool;
-struct __PageMapTblCachePool_t PageMapTblCachePool;
+struct __BlkMapTblCachePool_t BlkMapTblCachePool={0};
+struct __PageMapTblCachePool_t PageMapTblCachePool={0};
 
 void dump(void *buf, __u32 len , __u8 nbyte,__u8 linelen)
 {
@@ -224,34 +212,132 @@ static __s32 _write_back_page_map_tbl(__u32 nLogBlkPst)
     __u16 TablePage;
     __u32 TableBlk;
     struct  __NandUserData_t  UserData[2];
-    struct  __PhysicOpPara_t  param;
+    struct  __PhysicOpPara_t  param, tmpPage0;
     struct  __SuperPhyBlkType_t BadBlk,NewBlk;
+	__s32 result;
 
 
     /*check page poisition, merge if no free page*/
-    TablePage = LOG_BLK_TBL[nLogBlkPst].LastUsedPage + 1;
-    TableBlk = LOG_BLK_TBL[nLogBlkPst].PhyBlk.PhyBlkNum;
-    if (TablePage == PAGE_CNT_OF_SUPER_BLK){
-        /*block id full,need merge*/
-        if (LML_MergeLogBlk(SPECIAL_MERGE_MODE,LOG_BLK_TBL[nLogBlkPst].LogicBlkNum)){
-            MAPPING_ERR("write back page tbl : merge err\n");
-            return NAND_OP_FALSE;
-        }
+	if((SUPPORT_LOG_BLOCK_MANAGE)&&(LOG_BLK_TBL[nLogBlkPst].LogBlkType == LSB_TYPE))
+	{
+		TablePage = LOG_BLK_TBL[nLogBlkPst].LastUsedPage + 1;
+    	TableBlk = LOG_BLK_TBL[nLogBlkPst].PhyBlk.PhyBlkNum;
+		DBUG_MSG("[DBUG] _write_back_page_map_tbl, log block: %x, bak log block %x\n", LOG_BLK_TBL[nLogBlkPst].PhyBlk.PhyBlkNum, LOG_BLK_TBL[nLogBlkPst].PhyBlk1.PhyBlkNum);
+		DBUG_MSG("[DBUG] _write_back_page_map_tbl, select bak log block\n");
+		TablePage = PMM_CalNextLogPage(TablePage);
 
-        if (PAGE_MAP_CACHE->ZoneNum != 0xff){
-            /*move merge*/
-            TablePage = LOG_BLK_TBL[nLogBlkPst].LastUsedPage + 1;
-            TableBlk = LOG_BLK_TBL[nLogBlkPst].PhyBlk.PhyBlkNum;
-        }
-        else
-            return NAND_OP_TRUE;
-    }
+		if((TablePage >= PAGE_CNT_OF_SUPER_BLK)&&(LOG_BLK_TBL[nLogBlkPst].WriteBlkIndex == 0))
+		{
+			DBUG_MSG("[DBUG] _write_back_page_map_tbl, change to log block 1, phyblock1: %x\n", LOG_BLK_TBL[nLogBlkPst].PhyBlk1.PhyBlkNum);
+
+			LOG_BLK_TBL[nLogBlkPst].WriteBlkIndex = 1;
+			TablePage = TablePage - PAGE_CNT_OF_SUPER_BLK;
+		}
+
+		if(LOG_BLK_TBL[nLogBlkPst].WriteBlkIndex == 1)
+    		TableBlk = LOG_BLK_TBL[nLogBlkPst].PhyBlk1.PhyBlkNum;
+		else
+			TableBlk = LOG_BLK_TBL[nLogBlkPst].PhyBlk.PhyBlkNum;
+
+		if (TablePage >= PAGE_CNT_OF_SUPER_BLK){
+			//DBUG_INF("[DBUG] _write_back_page_map_tbl, log block full, need merge\n");
+	        /*block id full,need merge*/
+	        if (LML_MergeLogBlk(SPECIAL_MERGE_MODE,LOG_BLK_TBL[nLogBlkPst].LogicBlkNum)){
+	            MAPPING_ERR("write back page tbl : merge err\n");
+	            return NAND_OP_FALSE;
+	        }
+			DBUG_MSG("[DBUG] _write_back_page_map_tbl, log block merge end\n");
+	        if (PAGE_MAP_CACHE->ZoneNum != 0xff){
+	            /*move merge*/
+	            TablePage = LOG_BLK_TBL[nLogBlkPst].LastUsedPage + 1;
+	            TableBlk = LOG_BLK_TBL[nLogBlkPst].PhyBlk.PhyBlkNum;
+				TablePage = PMM_CalNextLogPage(TablePage);
+				//DBUG_INF("[DBUG] _write_back_page_map_tbl, after move merge, table block: %x, table page %x\n", TableBlk, TablePage);
+	        }
+	        else
+	            return NAND_OP_TRUE;
+	    }
+	}
+	else
+	{
+		TablePage = LOG_BLK_TBL[nLogBlkPst].LastUsedPage + 1;
+    	TableBlk = LOG_BLK_TBL[nLogBlkPst].PhyBlk.PhyBlkNum;
+
+		if (TablePage == PAGE_CNT_OF_SUPER_BLK){
+	        /*block id full,need merge*/
+	        if (LML_MergeLogBlk(SPECIAL_MERGE_MODE,LOG_BLK_TBL[nLogBlkPst].LogicBlkNum)){
+	            MAPPING_ERR("write back page tbl : merge err\n");
+	            return NAND_OP_FALSE;
+	        }
+
+	        if (PAGE_MAP_CACHE->ZoneNum != 0xff){
+	            /*move merge*/
+	            TablePage = LOG_BLK_TBL[nLogBlkPst].LastUsedPage + 1;
+	            TableBlk = LOG_BLK_TBL[nLogBlkPst].PhyBlk.PhyBlkNum;
+	        }
+	        else
+	            return NAND_OP_TRUE;
+	    }
+	}
+
+
 
 rewrite:
 //PRINT("-------------------write back page tbl for blk %x\n",TableBlk);
     /*write page map table*/
-    MEMSET((void *)&UserData,0xff,sizeof(struct __NandUserData_t) * 2);
+	if((SUPPORT_LOG_BLOCK_MANAGE)&&(LOG_BLK_TBL[nLogBlkPst].LogBlkType == LSB_TYPE))
+	{
+		if((TablePage== 0)&&(LOG_BLK_TBL[nLogBlkPst].WriteBlkIndex == 1))
+	    {
+			MEMSET((void *)(&UserData[0]),0xff,sizeof(struct __NandUserData_t) * 2);
+	        //log page is the page0 of the logblk1, should copy page0 of logblock0, and skip the page
+	        LML_CalculatePhyOpPar(&tmpPage0, CUR_MAP_ZONE, LOG_BLK_TBL[nLogBlkPst].PhyBlk.PhyBlkNum, 0);
+	        tmpPage0.SectBitmap = FULL_BITMAP_OF_SUPER_PAGE;
+	        tmpPage0.MDataPtr = LML_TEMP_BUF;
+	        tmpPage0.SDataPtr = (void *)UserData;
+	        result = LML_VirtualPageRead(&tmpPage0);
+	        if(result < 0)
+	        {
+	            LOGICCTL_ERR("[LOGICCTL_ERR] Get log age of data block failed when write logical page, Err:0x%x!\n", result);
+	            return -ERR_PHYSIC;
+	        }
+
+			//log page is the page0 of the logblk1, should skip the page
+			UserData[0].LogType = LSB_TYPE|(LOG_BLK_TBL[nLogBlkPst].WriteBlkIndex<<4);
+			UserData[1].LogType = LSB_TYPE|(LOG_BLK_TBL[nLogBlkPst].WriteBlkIndex<<4);
+
+	        LML_CalculatePhyOpPar(&tmpPage0, CUR_MAP_ZONE, LOG_BLK_TBL[nLogBlkPst].PhyBlk1.PhyBlkNum, 0);
+	        tmpPage0.SectBitmap = FULL_BITMAP_OF_SUPER_PAGE;
+	        tmpPage0.MDataPtr = LML_TEMP_BUF;
+	        tmpPage0.SDataPtr = (void *)UserData;
+	        result = LML_VirtualPageWrite(&tmpPage0);
+
+			TablePage++;
+
+	    }
+	}
+
+	MEMSET((void *)(&UserData[0]),0xff,sizeof(struct __NandUserData_t) * 2);
     UserData[0].PageStatus = 0xaa;
+	if((SUPPORT_LOG_BLOCK_MANAGE)&&(LOG_BLK_TBL[nLogBlkPst].LogBlkType == LSB_TYPE))
+	{
+		UserData[0].LogType = LSB_TYPE|(LOG_BLK_TBL[nLogBlkPst].WriteBlkIndex<<4);
+		UserData[1].LogType = LSB_TYPE|(LOG_BLK_TBL[nLogBlkPst].WriteBlkIndex<<4);
+	}
+	else
+	{
+		UserData[0].LogType = 0xff;
+		UserData[1].LogType = 0xff;
+	}
+
+	//if((SUPPORT_LOG_BLOCK_MANAGE)&&(LOG_BLK_TBL[nLogBlkPst].LogBlkType == LSB_TYPE)&&(TablePage== 0))
+	//{
+	//	DBUG_INF("[DBUG] _write_back_page_map_tbl in page0, TablePage: %x, TableBlk: %x\n", TablePage, TableBlk);
+	//	DBUG_INF("[DBUG] _write_back_page_map_tbl in page0, logicNum: %x, log0: %x, log1: %x\n", LOG_BLK_TBL[nLogBlkPst].LogicBlkNum,LOG_BLK_TBL[nLogBlkPst].PhyBlk.PhyBlkNum, LOG_BLK_TBL[nLogBlkPst].PhyBlk1.PhyBlkNum);
+	//	DBUG_INF("[DBUG] _write_back_page_map_tbl in page0, logicinfo: %x, logicpage: %x\n", UserData[0].LogicInfo, UserData[0].LogicPageNum);
+	//	DBUG_INF("[DBUG] _write_back_page_map_tbl in page0, logtype: %x, pagestatus: %x\n", UserData[0].LogType, UserData[0].PageStatus);
+	//}
+
     MEMSET(LML_PROCESS_TBL_BUF,0xff,SECTOR_CNT_OF_SUPER_PAGE * SECTOR_SIZE);
 
 	if(PAGE_CNT_OF_SUPER_BLK >= 512)
@@ -279,6 +365,7 @@ rewrite:
 //rewrite:
     LML_CalculatePhyOpPar(&param, CUR_MAP_ZONE, TableBlk, TablePage);
     LML_VirtualPageWrite(&param);
+
     if (NAND_OP_TRUE != PHY_SynchBank(param.BankNum, SYNC_CHIP_MODE)){
         BadBlk.PhyBlkNum = TableBlk;
         if (NAND_OP_TRUE != LML_BadBlkManage(&BadBlk,CUR_MAP_ZONE,TablePage,&NewBlk)){
@@ -294,6 +381,9 @@ rewrite:
     PAGE_MAP_CACHE->ZoneNum = 0xff;
     PAGE_MAP_CACHE->LogBlkPst = 0xff;
 
+	if((SUPPORT_LOG_BLOCK_MANAGE)&&(LOG_BLK_TBL[nLogBlkPst].LogBlkType == LSB_TYPE))
+		DBUG_MSG("[DBUG] _write_back_page_map_tbl end, lastusedpage: %x, write_index: %x\n", LOG_BLK_TBL[nLogBlkPst].LastUsedPage, LOG_BLK_TBL[nLogBlkPst].WriteBlkIndex);
+
     return NAND_OP_TRUE;
 
 }
@@ -302,7 +392,7 @@ static __s32 _rebuild_page_map_tbl(__u32 nLogBlkPst)
 {
     __s32 ret;
     __u16 TablePage;
-    __u32 TableBlk;
+    __u32 TableBlk, TableBlk1;
     __u16 logicpagenum;
     //__u8  status;
     struct  __NandUserData_t  UserData[2];
@@ -310,6 +400,7 @@ static __s32 _rebuild_page_map_tbl(__u32 nLogBlkPst)
 
     MEMSET(PAGE_MAP_TBL,0xff, PAGE_CNT_OF_SUPER_BLK*sizeof(struct __PageMapTblItem_t));
     TableBlk = LOG_BLK_TBL[nLogBlkPst].PhyBlk.PhyBlkNum;
+	TableBlk1 = LOG_BLK_TBL[nLogBlkPst].PhyBlk1.PhyBlkNum;
 
     param.MDataPtr = LML_PROCESS_TBL_BUF;
     param.SDataPtr = (void *)&UserData;
@@ -335,6 +426,29 @@ static __s32 _rebuild_page_map_tbl(__u32 nLogBlkPst)
         }
     }
 
+	if((SUPPORT_LOG_BLOCK_MANAGE)&&(LOG_BLK_TBL[nLogBlkPst].LogBlkType == LSB_TYPE))
+	{
+		 DBUG_MSG("[DBUG_MSG] _rebuild_page_map_tbl, select bak log block\n");
+		 for(TablePage = 0; TablePage < PAGE_CNT_OF_SUPER_BLK; TablePage++){
+	        LML_CalculatePhyOpPar(&param, CUR_MAP_ZONE, TableBlk1, TablePage);
+	        ret = LML_VirtualPageRead(&param);
+	        if (ret < 0){
+	            MAPPING_ERR("rebuild logic block %x page map table : read err\n",LOG_BLK_TBL[nLogBlkPst].LogicBlkNum);
+	            return NAND_OP_FALSE;
+	        }
+
+	        //status = UserData[0].PageStatus;
+	        logicpagenum = UserData[0].LogicPageNum;
+
+	        //if(((!TablePage || (status == 0x55))) && (logicpagenum != 0xffff) && (logicpagenum < PAGE_CNT_OF_SUPER_BLK)) /*legal page*/
+			if((logicpagenum != 0xffff) && (logicpagenum < PAGE_CNT_OF_SUPER_BLK)) /*legal page*/
+			{
+	            PAGE_MAP_TBL[logicpagenum].PhyPageNum = TablePage|(0x1U<<15); /*l2p:logical to physical*/
+	        }
+	    }
+
+	}
+
     PAGE_MAP_CACHE->DirtyFlag = 1;
 	BMM_SetDirtyFlag();
 
@@ -353,8 +467,21 @@ static __s32 _read_page_map_tbl(__u32 nLogBlkPst)
 
 
     /*check page poisition, merge if no free page*/
-    TablePage = LOG_BLK_TBL[nLogBlkPst].LastUsedPage;
-    TableBlk = LOG_BLK_TBL[nLogBlkPst].PhyBlk.PhyBlkNum;
+	if((SUPPORT_LOG_BLOCK_MANAGE)&&(LOG_BLK_TBL[nLogBlkPst].LogBlkType == LSB_TYPE))
+	{
+		DBUG_MSG("[DBUG_MSG] _read_page_map_tbl, select bak log block\n");
+		TablePage = LOG_BLK_TBL[nLogBlkPst].LastUsedPage;
+
+		if(LOG_BLK_TBL[nLogBlkPst].WriteBlkIndex == 1)
+    		TableBlk = LOG_BLK_TBL[nLogBlkPst].PhyBlk1.PhyBlkNum;
+		else
+			TableBlk = LOG_BLK_TBL[nLogBlkPst].PhyBlk.PhyBlkNum;
+	}
+	else
+	{
+		TablePage = LOG_BLK_TBL[nLogBlkPst].LastUsedPage;
+		TableBlk = LOG_BLK_TBL[nLogBlkPst].PhyBlk.PhyBlkNum;
+	}
 
     if (TablePage == 0xffff){
         /*log block is empty*/
@@ -733,6 +860,7 @@ rewrite:
     param.SectBitmap = FULL_BITMAP_OF_SUPER_PAGE;
     LML_CalculatePhyOpPar(&param, nZone, TableBlk, TablePage);
     LML_VirtualPageWrite(&param);
+
     if (NAND_OP_TRUE !=  PHY_SynchBank(param.BankNum, SYNC_CHIP_MODE)){
         BadBlk.PhyBlkNum = TableBlk;
         if (NAND_OP_TRUE != LML_BadBlkManage(&BadBlk,nZone,0,&NewBlk)){
@@ -952,6 +1080,130 @@ __s32 BMM_WriteBackAllMapTbl(void)
         return NAND_OP_TRUE;
 }
 
+__s32 BMM_MergeAllLogBlock(void)
+{
+	__u32 tmpZoneNum, ZoneCnt, tmpLogPos;
+	__s32 result;
+
+	ZoneCnt = ZONE_CNT_OF_DIE * DieCntOfNand;
+	PRINT("BMM_MergeAllLogBlock, ZoneCnt: %x\n", ZoneCnt);
+
+	result = 0;
+	for(tmpZoneNum=0; tmpZoneNum<ZoneCnt; tmpZoneNum++)
+	{
+		PRINT("BMM_MergeAllLogBlock, tmpZoneNum: %x\n", tmpZoneNum);
+
+        //swap the block mapping table to ram which is need be accessing currently
+        result = BMM_SwitchMapTbl(tmpZoneNum);
+        if(result < 0)
+        {
+            MAPPING_ERR("[MAPPING_ERR] BMM_MergeAllLogBlock, Switch block mapping table failed when read logical page! Err:0x%x\n", result);
+            return -ERR_MAPPING;
+        }
+
+
+		BMM_SetDirtyFlag();
+
+		for(tmpLogPos = 0; tmpLogPos<MAX_LOG_BLK_CNT; tmpLogPos++)
+		{
+			if(LOG_BLK_TBL[tmpLogPos].LogicBlkNum != 0xffff)
+			{
+				PRINT("BMM_MergeAllLogBlock, logpos: %x, logblock: %x\n", tmpLogPos, LOG_BLK_TBL[tmpLogPos].LogicBlkNum);
+				//need swap the page mapping table to ram which is accessing currently
+			    result = PMM_SwitchMapTbl(tmpLogPos);
+			    if(result < 0)
+			    {
+			        MAPPING_ERR("[MAPPING_ERR] BMM_MergeAllLogBlock, Switch page mapping table failed when switch page map table! Err:0x%x\n", result);
+			        return -1;
+			    }
+
+
+				result = LML_MergeLogBlk(NORMAL_MERGE_MODE,LOG_BLK_TBL[tmpLogPos].LogicBlkNum);
+				if(result<0)
+				{
+		            MAPPING_ERR("[MAPPING_ERR] BMM_MergeAllLogBlock, merge error! Err:0x%x\n", result);
+		            return -ERR_MAPPING;
+				}
+
+			}
+		}
+	}
+
+	PRINT("BMM_MergeAllLogBlock end\n");
+	return result;
+
+}
+
+__s32 BMM_RleaseLogBlock(__u32 log_level)
+{
+	__s32 result;
+	__s32 tmpPst=-1, i, ValidLogblkCnt = 0;
+    __u16 tmpLogAccessAge = 0xffff;
+
+	 //check if need to release log block
+	ValidLogblkCnt = 0;
+    for(i=0; i<LOG_BLK_CNT_OF_ZONE; i++)
+    {
+        if(LOG_BLK_TBL[i].LogicBlkNum != 0xffff)
+        {
+            ValidLogblkCnt++;
+        }
+    }
+
+	//valid log block if less than log_level, no need to release log block
+	if(ValidLogblkCnt<=log_level)
+        return 0;
+
+	//PRINT("BMM_RleaseLogBlock\n");
+	BMM_SetDirtyFlag();
+
+	 //check if there is some full log block
+    for(i=0; i<LOG_BLK_CNT_OF_ZONE; i++)
+    {
+        if(LOG_BLK_TBL[i].LastUsedPage == PAGE_CNT_OF_SUPER_BLK-1)
+        {
+            tmpPst = i;
+            break;
+        }
+    }
+
+    if(tmpPst == -1)
+    {
+        //there is no full log block, look for an oldest log block to merge
+        for(i=0; i<LOG_BLK_CNT_OF_ZONE; i++)
+        {
+            if((LOG_ACCESS_AGE[i] < tmpLogAccessAge)&&(LOG_BLK_TBL[i].LogicBlkNum != 0xffff))
+            {
+                tmpLogAccessAge = LOG_ACCESS_AGE[i];
+                tmpPst = i;
+            }
+        }
+    }
+
+	if(tmpPst == -1)
+		return -1;
+
+    //switch the page mapping table for merge the log block
+    result = PMM_SwitchMapTbl(tmpPst);
+    if(result < 0)
+    {
+        MAPPING_ERR("[MAPPING_ERR] Switch page mapping table failed when create new log block! Err:0x%x\n", result);
+        return -1;
+    }
+
+    //merge the log block with normal type, to make an empty item
+    result = LML_MergeLogBlk(NORMAL_MERGE_MODE, LOG_BLK_TBL[tmpPst].LogicBlkNum);
+    if(result < 0)
+    {
+        //merge log block failed, report error
+        MAPPING_ERR("[MAPPING_ERR] Merge log block failed when create new log block! Err:0x%x\n", result);
+        return -1;
+    }
+
+	return (ValidLogblkCnt-1);
+
+}
+
 static __s32 _write_dirty_flag(__u8 nZone)
 {
     __s32 TablePage;
@@ -1000,6 +1252,36 @@ __s32 BMM_SetDirtyFlag(void)
     }
 
     return NAND_OP_TRUE;
+}
+
+void BMM_DumpMap(void)
+{
+	__u32 i;
+
+	for(i=0; i<BLOCK_MAP_TBL_CACHE_CNT; i++)
+	{
+		PRINT("\n");
+		PRINT("++++++++++++++++++++++++++++++++++++++++++++++++++++\n");
+		PRINT("data block table:\n");
+		dump(BLK_MAP_CACHE_POOL->BlkMapTblCachePool[i].DataBlkTbl, 4096, 2, 16);
+		PRINT("++++++++++++++++++++++++++++++++++++++++++++++++++++\n");
+		PRINT("\n");
+
+		PRINT("\n");
+		PRINT("++++++++++++++++++++++++++++++++++++++++++++++++++++\n");
+		PRINT("log block table:\n");
+		dump(BLK_MAP_CACHE_POOL->BlkMapTblCachePool[i].LogBlkTbl, 1024, 2, 16);
+		PRINT("++++++++++++++++++++++++++++++++++++++++++++++++++++\n");
+		PRINT("\n");
+
+		PRINT("\n");
+		PRINT("++++++++++++++++++++++++++++++++++++++++++++++++++++\n");
+		PRINT("free block table:\n");
+		dump(BLK_MAP_CACHE_POOL->BlkMapTblCachePool[i].FreeBlkTbl, 1024, 2, 16);
+		PRINT("++++++++++++++++++++++++++++++++++++++++++++++++++++\n");
+		PRINT("\n");
+
+	}
 }
 
 

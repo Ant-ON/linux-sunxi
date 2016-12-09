@@ -1,23 +1,9 @@
 /*
- * drivers/block/sunxi_nand/src/physic/nand_simple_w.c
+ * Copyright (C) 2013 Allwinnertech, kevin.z.m <kevin@allwinnertech.com>
  *
- * (C) Copyright 2007-2012
- * Allwinner Technology Co., Ltd. <www.allwinnertech.com>
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License as
- * published by the Free Software Foundation; either version 2 of
- * the License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.	 See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston,
- * MA 02111-1307 USA
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
  */
 
 #include "../include/nand_type.h"
@@ -46,7 +32,7 @@ __s32 _write_signle_page (struct boot_physical_param *writeop,__u32 program1,__u
 	__u32 rb;
 	__u32 random_seed;
 	//__u8 *sparebuf;
-	__u8 sparebuf[4*16];
+	__u8 sparebuf[4*32];
 	__u8 addr[5];
 	NFC_CMD_LIST cmd_list[4];
 	__u32 list_len,i,addr_cycle;
@@ -101,7 +87,7 @@ __s32 _write_signle_page_seq (struct boot_physical_param *writeop,__u32 program1
 	__u32 rb;
 	__u32 random_seed;
 	//__u8 *sparebuf;
-	__u8 sparebuf[4*16];
+	__u8 sparebuf[4*32];
 	__u8 addr[5];
 	NFC_CMD_LIST cmd_list[4];
 	__u32 list_len,i,addr_cycle;
@@ -157,7 +143,7 @@ __s32 _write_signle_page_1K (struct boot_physical_param *writeop,__u32 program1,
 	__u32 rb;
 	__u32 random_seed;
 	//__u8 *sparebuf;
-	__u8 sparebuf[4*16];
+	__u8 sparebuf[4*32];
 	__u8 addr[5];
 	NFC_CMD_LIST cmd_list[4];
 	__u32 list_len,i,addr_cycle;
@@ -243,7 +229,7 @@ __s32 PHY_SimpleWrite (struct boot_physical_param *writeop)
 
 	ret = _write_signle_page(writeop,0x80,0x10,0,0);
 	if (ret)
-		return FAIL;
+		return -1;
 	rb = _cal_real_rb(writeop->chip);
 	NFC_SelectChip(writeop->chip);
 	NFC_SelectRb(rb);
@@ -257,7 +243,7 @@ __s32 PHY_SimpleWrite (struct boot_physical_param *writeop)
 			break;
 	}
 	if (status & NAND_OPERATE_FAIL)
-		ret = BADBLOCK;
+		ret = -2;
 	NFC_DeSelectChip(writeop->chip);
 	NFC_DeSelectRb(rb);
 
@@ -273,7 +259,7 @@ __s32 PHY_SimpleWrite_Seq (struct boot_physical_param *writeop)
 
 	ret = _write_signle_page_seq(writeop,0x80,0x10,0,0);
 	if (ret)
-		return FAIL;
+		return -1;
 	rb = _cal_real_rb(writeop->chip);
 	NFC_SelectChip(writeop->chip);
 	NFC_SelectRb(rb);
@@ -287,7 +273,7 @@ __s32 PHY_SimpleWrite_Seq (struct boot_physical_param *writeop)
 			break;
 	}
 	if (status & NAND_OPERATE_FAIL)
-		ret = BADBLOCK;
+		ret = -2;
 	NFC_DeSelectChip(writeop->chip);
 	NFC_DeSelectRb(rb);
 
@@ -303,7 +289,7 @@ __s32 PHY_SimpleWrite_1K (struct boot_physical_param *writeop)
 
 	ret = _write_signle_page_1K(writeop,0x80,0x10,0,0);
 	if (ret)
-		return FAIL;
+		return -1;
 	rb = _cal_real_rb(writeop->chip);
 	NFC_SelectChip(writeop->chip);
 	NFC_SelectRb(rb);
@@ -317,7 +303,7 @@ __s32 PHY_SimpleWrite_1K (struct boot_physical_param *writeop)
 			break;
 	}
 	if (status & NAND_OPERATE_FAIL)
-		ret = BADBLOCK;
+		ret = -2;
 	NFC_DeSelectChip(writeop->chip);
 	NFC_DeSelectRb(rb);
 
@@ -333,7 +319,7 @@ __s32 PHY_SimpleErase (struct boot_physical_param *eraseop )
 
 	ret = _erase_single_block(eraseop);
 	if (ret)
-		return FAIL;
+		return -1;
 	rb = _cal_real_rb(eraseop->chip);
 	NFC_SelectChip(eraseop->chip);
 	NFC_SelectRb(rb);
@@ -344,7 +330,7 @@ __s32 PHY_SimpleErase (struct boot_physical_param *eraseop )
 			break;
 	}
 	if (status & NAND_OPERATE_FAIL)
-		ret = BADBLOCK;
+		ret = -2;
 
 	NFC_DeSelectChip(eraseop->chip);
 	NFC_DeSelectRb(rb);

@@ -6,17 +6,10 @@
  * published by the Free Software Foundation.
  */
 
+#ifndef __NAND_INCLUDE_H__
+#define __NAND_INCLUDE_H__
 
-#ifndef  __NAND_TEST_H__
-#define  __NAND_TEST_H__
-
-
-
-#define  INIT_NAND_IN_TESTDRIVER
-//#define   NAND_CACHE_RW
-
-#define REPEAT_TIMES    500000
-
-
+int nand_init(void);
+void nand_exit(void);
 
 #endif

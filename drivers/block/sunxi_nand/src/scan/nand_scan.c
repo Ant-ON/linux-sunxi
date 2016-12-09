@@ -1,27 +1,14 @@
 /*
- * drivers/block/sunxi_nand/src/scan/nand_scan.c
+ * Copyright (C) 2013 Allwinnertech, kevin.z.m <kevin@allwinnertech.com>
  *
- * (C) Copyright 2007-2012
- * Allwinner Technology Co., Ltd. <www.allwinnertech.com>
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License as
- * published by the Free Software Foundation; either version 2 of
- * the License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.	 See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston,
- * MA 02111-1307 USA
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
  */
 
+
 #include "../include/nand_scan.h"
-#include"../../nfc/nfc.h"
+#include "../../nfc/nfc.h"
 
 
 extern  struct __NandStorageInfo_t  NandStorageInfo;
@@ -37,7 +24,147 @@ extern struct __NandPhyInfoPar_t SpansionNandTbl;
 extern struct __NandPhyInfoPar_t PowerNandTbl;
 extern struct __NandPhyInfoPar_t SandiskNandTbl;
 
-__s32 NAND_Detect(boot_nand_para_t *nand_connect);
+__u32 NAND_GetPageSize(void)
+{
+	return (NandStorageInfo.SectorCntPerPage *512);
+}
+
+__u32 NAND_GetLogicPageSize(void)
+{
+	return (SECTOR_CNT_OF_SUPER_PAGE*512);
+}
+
+__u32 NAND_GetPageCntPerBlk(void)
+{
+	return NandStorageInfo.PageCntPerPhyBlk;
+}
+
+__u32 NAND_GetBlkCntPerChip(void)
+{
+	return NandStorageInfo.BlkCntPerDie * NandStorageInfo.DieCntPerChip;
+}
+
+__u32 NAND_GetChipCnt(void)
+{
+	return NandStorageInfo.ChipCnt;
+}
+
+__u32 NAND_GetChipConnect(void)
+{
+	return NandStorageInfo.ChipConnectInfo;
+}
+
+__u32 NAND_GetBadBlockFlagPos(void)
+{
+	return 2;
+}
+
+__u32 NAND_GetReadRetryType(void)
+{
+	return NandStorageInfo.ReadRetryType;
+}
+
+__u32 NAND_GetValidBlkRatio(void)
+{
+    return NandStorageInfo.ValidBlkRatio;
+}
+
+__s32 NAND_SetValidBlkRatio(__u32 ValidBlkRatio)
+{
+    NandStorageInfo.ValidBlkRatio = (__u16)ValidBlkRatio;
+    return 0;
+}
+
+__u32 NAND_GetFrequencePar(void)
+{
+    return NandStorageInfo.FrequencePar;
+}
+
+__s32 NAND_SetFrequencePar(__u32 FrequencePar)
+{
+    NandStorageInfo.FrequencePar = (__u8)FrequencePar;
+    return 0;
+}
+
+__s32 NAND_GetBlkCntOfDie(void)
+{
+	return NandStorageInfo.BlkCntPerDie;
+}
+
+__s32 NAND_GetDieSkipFlag(void)
+{
+	return (NandStorageInfo.OperationOpt&(0x1<<11));
+}
+__u32 NAND_GetOperationOpt(void)
+{
+	return NandStorageInfo.OperationOpt;
+}
+__u32 NAND_GetNandVersion(void)
+{
+    __u32 nand_version;
+
+	nand_version = 0;
+	nand_version |= 0xff;
+	nand_version |= 0x00<<8;
+	nand_version |= NAND_VERSION_0<<16;
+	nand_version |= NAND_VERSION_1<<24;
+
+	return nand_version;
+}
+
+__u32 NAND_GetVersion(__u8* nand_version)
+{
+	__u32 ret;
+
+	ret = NAND_GetNandVersion();
+	*(__u32 *)nand_version = ret;
+
+	return ret;
+}
+
+__u32 NAND_GetNandVersionDate(void)
+{
+	return 0x20121209;
+}
+__s32 NAND_GetParam(boot_nand_para_t * nand_param)
+{
+	__u32 i;
+
+	nand_param->ChipCnt            =   NandStorageInfo.ChipCnt           ;
+	nand_param->ChipConnectInfo    =   NandStorageInfo.ChipConnectInfo   ;
+	nand_param->RbCnt              =   NandStorageInfo.RbCnt             ;
+	nand_param->RbConnectInfo      =   NandStorageInfo.RbConnectInfo     ;
+	nand_param->RbConnectMode      =   NandStorageInfo.RbConnectMode     ;
+	nand_param->BankCntPerChip     =   NandStorageInfo.BankCntPerChip    ;
+	nand_param->DieCntPerChip      =   NandStorageInfo.DieCntPerChip     ;
+	nand_param->PlaneCntPerDie     =   NandStorageInfo.PlaneCntPerDie    ;
+	nand_param->SectorCntPerPage   =   NandStorageInfo.SectorCntPerPage  ;
+	nand_param->PageCntPerPhyBlk   =   NandStorageInfo.PageCntPerPhyBlk  ;
+	nand_param->BlkCntPerDie       =   NandStorageInfo.BlkCntPerDie      ;
+	nand_param->OperationOpt       =   NandStorageInfo.OperationOpt      ;
+	nand_param->FrequencePar       =   NandStorageInfo.FrequencePar      ;
+	nand_param->EccMode            =   NandStorageInfo.EccMode           ;
+	nand_param->ValidBlkRatio      =   NandStorageInfo.ValidBlkRatio     ;
+	nand_param->good_block_ratio   =   NandStorageInfo.ValidBlkRatio     ;
+	nand_param->ReadRetryType      =   NandStorageInfo.ReadRetryType     ;
+	nand_param->DDRType            =   NandStorageInfo.DDRType           ;
+
+	for(i =0; i<8; i++)
+	    nand_param->NandChipId[i]   =   NandStorageInfo.NandChipId[i];
+
+	return 0;
+}
+
+__s32 NAND_GetFlashInfo(boot_flash_info_t *param)
+{
+	param->chip_cnt	 		= NandStorageInfo.ChipCnt;
+	param->blk_cnt_per_chip = NandStorageInfo.BlkCntPerDie * NandStorageInfo.DieCntPerChip;
+	param->blocksize 		= SECTOR_CNT_OF_SINGLE_PAGE * PAGE_CNT_OF_PHY_BLK;
+	param->pagesize  		= SECTOR_CNT_OF_SINGLE_PAGE;
+	param->pagewithbadflag  = NandStorageInfo.OptPhyOpPar.BadBlockFlagPosition;
+
+	return 0;
+}
 
 
 /*
@@ -292,6 +419,7 @@ __s32  SCN_AnalyzeNandSystem(void)
         NandStorageInfo.OperationOpt |= NAND_PAGE_ADR_NO_SKIP;
     }
 
+
     //process the plane count of a die and the bank count of a chip
     if(!SUPPORT_MULTI_PROGRAM)
     {
@@ -368,10 +496,17 @@ __s32  SCN_AnalyzeNandSystem(void)
     //process the external inter-leave operation
     if(CFG_SUPPORT_EXT_INTERLEAVE)
     {
-        if(NandStorageInfo.ChipCnt > 1)
-        {
-            NandStorageInfo.OperationOpt |= NAND_EXT_INTERLEAVE;
-        }
+        if(NandStorageInfo.OperationOpt & (1<<6))
+  		{
+  			if(NandStorageInfo.ChipCnt > 1)
+		    {
+		        NandStorageInfo.OperationOpt |= NAND_EXT_INTERLEAVE;
+		    }
+	        else if(NandStorageInfo.ChipCnt == 1)
+	      	{
+	      		NandStorageInfo.OperationOpt &= ~NAND_EXT_INTERLEAVE;
+	      	}
+  		}
     }
     else
     {

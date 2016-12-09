@@ -1,40 +1,30 @@
 /*
- * drivers/block/sunxi_nand/src/format/nand_format.c
+ * Copyright (C) 2013 Allwinnertech, kevin.z.m <kevin@allwinnertech.com>
  *
- * (C) Copyright 2007-2012
- * Allwinner Technology Co., Ltd. <www.allwinnertech.com>
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License as
- * published by the Free Software Foundation; either version 2 of
- * the License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.	 See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston,
- * MA 02111-1307 USA
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
  */
 
 #include "../include/nand_format.h"
 #include "../include/nand_logic.h"
 
 #define DBG_DUMP_DIE_INFO       (1)
+#define LOG_BLOCK_ECC_CHECK
+//#define NORMAL_LOG_BLOCK_ECC_CHECK
+#define LOG_AGE_SEQ_CHECK
 
 extern  struct __NandDriverGlobal_t     NandDriverInfo;
 extern  struct __LogicArchitecture_t    LogicArchiPar;
 extern  struct __ZoneTblPstInfo_t       ZoneTblPstInfo[MAX_ZONE_CNT];
 
-extern  struct __NandStorageInfo_t  NandStorageInfo;
+extern  struct __NandStorageInfo_t      NandStorageInfo;
 extern  struct __NandPageCachePool_t    PageCachePool;
+extern  struct __NandPartInfo_t         NandPartInfo[NAND_MAX_PART_CNT];
 
 
 //define some local variable
-static __u32 DieCntOfNand = 0;          //the count of dies in a nand chip
+__u32 DieCntOfNand = 0;          //the count of dies in a nand chip
 static __u32 SuperBlkCntOfDie = 0;      //the count of the super blocks in a Die
 
 blk_for_boot1_t blks_array[ ] = {
@@ -45,7 +35,158 @@ blk_for_boot1_t blks_array[ ] = {
 	{ 512, 4, 3 },
 	{ 0xffffffff,   4, 3 },
 };
-__u32 DIE0_FIRST_BLK_NUM;
+__u32 DIE0_FIRST_BLK_NUM=0;
+
+__u8 *lsb_page=NULL;
+
+static void _LSBPageTypeTabInit(void)
+{
+	__s32 i;
+
+	FORMAT_DBG("Request memory for lsb page table \n");
+	lsb_page = (__u8 *)MALLOC(MAX_SUPER_PAGE_CNT);
+	if(!lsb_page)
+    {
+        FORMAT_ERR("NAND: Request memory for lsb page table failed, size: %x !!", (MAX_SUPER_PAGE_CNT*2));
+    }
+
+	//init lsb page table for hynix mode
+	if(LOG_BLOCK_LSB_PAGE_TYPE == 0x0) //hynix & micron 256 page
+	{
+		FORMAT_DBG("page type: %x\n", LOG_BLOCK_LSB_PAGE_TYPE);
+		if((SUPPORT_EXT_INTERLEAVE)&&(NandStorageInfo.ChipCnt >=2))
+		{
+			for(i=0; i<PAGE_CNT_OF_PHY_BLK;i++)
+			{
+				if((i%4 == 2)||(i%4 == 3))
+				{
+					lsb_page[2*i] = 1;
+					lsb_page[2*i+1] = 1;
+				}
+				else
+				{
+					lsb_page[2*i] = 0;
+					lsb_page[2*i+1] = 0;
+				}
+			}
+			lsb_page[0] = 1;
+			lsb_page[1] = 1;
+			lsb_page[2] = 1;
+			lsb_page[3] = 1;
+			lsb_page[2*(PAGE_CNT_OF_PHY_BLK-2)] = 0;
+			lsb_page[2*(PAGE_CNT_OF_PHY_BLK-2)+1] = 0;
+			lsb_page[2*(PAGE_CNT_OF_PHY_BLK-1)] = 0;
+			lsb_page[2*(PAGE_CNT_OF_PHY_BLK-1)+1] = 0;
+		}
+		else
+		{
+			for(i=0; i<PAGE_CNT_OF_PHY_BLK;i++)
+			{
+				if((i%4 == 2)||(i%4 == 3))
+					lsb_page[i] = 1;
+				else
+					lsb_page[i] = 0;
+			}
+			lsb_page[0] = 1;
+			lsb_page[1] = 1;
+			lsb_page[PAGE_CNT_OF_PHY_BLK-2] = 0;
+			lsb_page[PAGE_CNT_OF_PHY_BLK-1] = 0;
+		}
+
+	}
+	else if(LOG_BLOCK_LSB_PAGE_TYPE == 0x1) //samsung & toshiba 128 page
+	{
+		FORMAT_DBG("page type: %x\n", LOG_BLOCK_LSB_PAGE_TYPE);
+		if((SUPPORT_EXT_INTERLEAVE)&&(NandStorageInfo.ChipCnt >=2))
+		{
+			for(i=0; i<PAGE_CNT_OF_PHY_BLK;i++)
+			{
+				if(i%2 == 1)
+				{
+					lsb_page[2*i] = 1;
+					lsb_page[2*i+1] = 1;
+				}
+				else
+				{
+					lsb_page[2*i] = 0;
+					lsb_page[2*i+1] = 0;
+				}
+			}
+			lsb_page[0] = 1;
+			lsb_page[1] = 1;
+			lsb_page[2*(PAGE_CNT_OF_PHY_BLK-1)] = 0;
+			lsb_page[2*(PAGE_CNT_OF_PHY_BLK-1)+1] = 0;
+		}
+		else
+		{
+			for(i=0; i<PAGE_CNT_OF_PHY_BLK;i++)
+			{
+				if(i%2 == 1)
+					lsb_page[i] = 1;
+				else
+					lsb_page[i] = 0;
+			}
+			lsb_page[0] = 1;
+			lsb_page[PAGE_CNT_OF_PHY_BLK-1] = 0;
+		}
+
+	}
+	else if(LOG_BLOCK_LSB_PAGE_TYPE == 0x2) //hynix & micron 256 page
+	{
+		FORMAT_DBG("NAND: page type: %x\n", LOG_BLOCK_LSB_PAGE_TYPE);
+		if((SUPPORT_EXT_INTERLEAVE)&&(NandStorageInfo.ChipCnt >=2))
+		{
+			for(i=0; i<PAGE_CNT_OF_PHY_BLK;i++)
+			{
+				if((i%4 == 0)||(i%4 == 1))
+				{
+					lsb_page[2*i] = 1;
+					lsb_page[2*i+1] = 1;
+				}
+				else
+				{
+					lsb_page[2*i] = 0;
+					lsb_page[2*i+1] = 0;
+				}
+			}
+
+			for(i=0;i<6;i++)
+			{
+				lsb_page[2*i] = 1;
+				lsb_page[2*i+1] = 1;
+				lsb_page[2*(PAGE_CNT_OF_PHY_BLK-1-i)] = 0;
+				lsb_page[2*(PAGE_CNT_OF_PHY_BLK-1-i)+1] = 0;
+			}
+		}
+		else
+		{
+			for(i=0; i<PAGE_CNT_OF_PHY_BLK;i++)
+			{
+				if((i%4 == 0)||(i%4 == 1))
+					lsb_page[i] = 1;
+				else
+					lsb_page[i] = 0;
+			}
+
+			for(i=0;i<6;i++)
+			{
+				lsb_page[i] = 1;
+				lsb_page[PAGE_CNT_OF_PHY_BLK-1-i] = 0;
+			}
+
+		}
+
+	}
+
+	DBUG_MSG("NAND: LSB table:");
+	for(i=0; i<PAGE_CNT_OF_LOGIC_BLK;i++)
+	{
+		if(lsb_page[i] == 1)
+			DBUG_MSG(" 0x%x \n", i);
+	}
+
+	FORMAT_DBG("Init lsb page table ok\n");
+}
 
 /*
 ************************************************************************************************************************
@@ -71,7 +212,7 @@ __s32 _CalculatePhyOpPar(struct __PhysicOpPara_t *pPhyPar, __u32 nZone, __u32 nB
 
     __u32   tmpDieNum, tmpBnkNum, tmpBlkNum, tmpPageNum;
 
-//    FORMAT_DBG("[FORMAT_DBG] Calculate the physical operation parameters.\n"
+//    FORMAT_DBG("NAND: Calculate the physical operation parameters.\n"
 //               "             ZoneNum:0x%x, BlockNum:0x%x, PageNum: 0x%x\n", nZone, nBlock, nPage);
 
     //calcualte the Die number by the zone number
@@ -137,7 +278,7 @@ __s32 _CalculatePhyOpPar(struct __PhysicOpPara_t *pPhyPar, __u32 nZone, __u32 nB
 
     __u32   tmpDieNum, tmpBnkNum, tmpBlkNum, tmpPageNum;
 
-//    FORMAT_DBG("[FORMAT_DBG] Calculate the physical operation parameters.\n"
+//    FORMAT_DBG("NAND: Calculate the physical operation parameters.\n"
 //               "             ZoneNum:0x%x, BlockNum:0x%x, PageNum: 0x%x\n", nZone, nBlock, nPage);
 
     //calcualte the Die number by the zone number
@@ -220,7 +361,7 @@ __s32 _CalculatePhyOpPar(struct __PhysicOpPara_t *pPhyPar, __u32 nZone, __u32 nB
 *               < 0     read page data failed.
 ************************************************************************************************************************
 */
-static __s32 _VirtualPageRead(__u32 nDieNum, __u32 nBlkNum, __u32 nPage, __u32 SectBitmap, void *pBuf, void *pSpare)
+static __s32 _VirtualPageRead(__u32 nDieNum, __u32 nBlkNum, __u32 nPage, __u64 SectBitmap, void *pBuf, void *pSpare)
 {
     __s32 i, result;
     __u8  *tmpSrcData, *tmpDstData, *tmpSrcPtr[4], *tmpDstPtr[4];
@@ -239,7 +380,7 @@ static __s32 _VirtualPageRead(__u32 nDieNum, __u32 nBlkNum, __u32 nPage, __u32 S
         //process the pointer to spare area data
         for(i=0; i<2; i++)
         {
-            if(SectBitmap & (1<<i))
+            if(SectBitmap & ((__u64)1<<i))
             {
                 tmpSrcPtr[i] = FORMAT_SPARE_BUF + 4 * i;
                 tmpDstPtr[i] = (__u8 *)pSpare + 4 * i;
@@ -252,7 +393,7 @@ static __s32 _VirtualPageRead(__u32 nDieNum, __u32 nBlkNum, __u32 nPage, __u32 S
 
         for(i=0; i<2; i++)
         {
-            if(SectBitmap & (1<<(i + SECTOR_CNT_OF_SINGLE_PAGE)))
+            if(SectBitmap & ((__u64)1<<(i + SECTOR_CNT_OF_SINGLE_PAGE)))
             {
                 tmpSrcPtr[i+2] = LML_SPARE_BUF + 4 * (i + SECTOR_CNT_OF_SINGLE_PAGE);
                 tmpDstPtr[i+2] = (__u8 *)pSpare + 8 + 4 * i;
@@ -273,8 +414,6 @@ static __s32 _VirtualPageRead(__u32 nDieNum, __u32 nBlkNum, __u32 nPage, __u32 S
         tmpPhyPage.SDataPtr = NULL;
 		result = PHY_PageRead(&tmpPhyPage);
     }
-
-
 
     //process spare area data
     if(pSpare)
@@ -330,7 +469,7 @@ static __s32 _VirtualPageRead(__u32 nDieNum, __u32 nBlkNum, __u32 nPage, __u32 S
 *               < 0     write page data failed.
 ************************************************************************************************************************
 */
-static __s32 _VirtualPageWrite(__u32 nDieNum, __u32 nBlkNum, __u32 nPage, __u32 SectBitmap, void *pBuf, void *pSpare)
+static __s32 _VirtualPageWrite(__u32 nDieNum, __u32 nBlkNum, __u32 nPage, __u64 SectBitmap, void *pBuf, void *pSpare)
 {
     __s32 i, result;
     __u8  *tmpSrcData, *tmpDstData, *tmpSrcPtr[4], *tmpDstPtr[4];
@@ -350,7 +489,7 @@ static __s32 _VirtualPageWrite(__u32 nDieNum, __u32 nBlkNum, __u32 nPage, __u32 
         //process the pointer to spare area data
         for(i=0; i<2; i++)
         {
-            if(SectBitmap & (1<<i))
+            if(SectBitmap & ((__u64)1<<i))
             {
                 tmpSrcPtr[i] = (__u8 *)pSpare + 4 * i;
                 tmpDstPtr[i] = FORMAT_SPARE_BUF + 4 * i;
@@ -363,7 +502,7 @@ static __s32 _VirtualPageWrite(__u32 nDieNum, __u32 nBlkNum, __u32 nPage, __u32 
 
         for(i=0; i<2; i++)
         {
-            if(SectBitmap & (1<<(i + SECTOR_CNT_OF_SINGLE_PAGE)))
+            if(SectBitmap & ((__u64)1<<(i + SECTOR_CNT_OF_SINGLE_PAGE)))
             {
                 tmpSrcPtr[i+2] = (__u8 *)pSpare + 8 + 4 * i;
                 tmpDstPtr[i+2] = LML_SPARE_BUF + 4 * (i + SECTOR_CNT_OF_SINGLE_PAGE);
@@ -485,7 +624,7 @@ static __s32 _VirtualBlockCopy(__u32 nDieNum, __u32 nSrcBlk, __u32 nDstBlk)
         result = PHY_SynchBank(tmpDstBlk.BankNum, SYNC_CHIP_MODE);
         if(result < 0)
         {
-            FORMAT_ERR("[FORMAT_ERR] Copy page write failed!\n");
+            FORMAT_ERR("NAND: Copy page write failed!\n");
 
             return -1;
         }
@@ -493,6 +632,205 @@ static __s32 _VirtualBlockCopy(__u32 nDieNum, __u32 nSrcBlk, __u32 nDstBlk)
 
     return 0;
 }
+
+static __s32 _VirtualLogBlkRepair(__u32 nDieNum, __u32 nSrcBlk, __u32 nDstBlk, __u32 last_page)
+{
+    __s32 i, ret, result = 0, page_cnt;
+    struct __PhysicOpPara_t tmpSrcBlk, tmpDstBlk;
+	struct __NandUserData_t *tmpSpare;
+
+	tmpSpare = (struct __NandUserData_t *)PHY_TMP_SPARE_CACHE;
+
+	FORMAT_DBG("NAND: _VirtualLogBlkRepair, srcblock: %x, dstblock: %x, lastpaqe: %x\n", nSrcBlk, nDstBlk, last_page);
+
+    if(last_page<PAGE_CNT_OF_SUPER_BLK)
+        page_cnt = last_page;
+    else
+        page_cnt = PAGE_CNT_OF_SUPER_BLK -1;
+
+    //copy every page from source block to destination block
+    for(i=0; i<=last_page; i++)
+    {
+		if(i>=PAGE_CNT_OF_SUPER_BLK)
+			break;
+
+        //calculate the physical operation paramter for the source page and destination page
+        _CalculatePhyOpPar(&tmpSrcBlk, nDieNum * ZONE_CNT_OF_DIE, nSrcBlk, i);
+        _CalculatePhyOpPar(&tmpDstBlk, nDieNum * ZONE_CNT_OF_DIE, nDstBlk, i);
+		tmpSrcBlk.SectBitmap = tmpDstBlk.SectBitmap = FULL_BITMAP_OF_SUPER_PAGE;
+		tmpSrcBlk.MDataPtr = tmpDstBlk.MDataPtr = PHY_TMP_PAGE_CACHE;
+		tmpSrcBlk.SDataPtr = tmpDstBlk.SDataPtr = PHY_TMP_SPARE_CACHE;
+
+		ret = PHY_PageRead(&tmpSrcBlk);
+		if(ret == -ERR_ECC)
+		{
+			if(i == 0)
+			{
+				FORMAT_DBG("NAND: _VirtualLogBlkRepair, page 0 ecc error, write back page 0\n");
+				tmpSpare->LogicPageNum = 0xffff;
+			}
+			else
+			{
+				//skip ecc page
+				FORMAT_DBG("NAND: _VirtualLogBlkRepair, skip page %x as ecc error page\n", i);
+				continue;
+			}
+
+		}
+		else if((tmpSpare->BadBlkFlag == 0xff)&&(tmpSpare->LogicInfo == 0xffff)\
+			&&(tmpSpare->LogicPageNum == 0xffff)&&(tmpSpare->LogType == 0xff)\
+			&&(tmpSpare->PageStatus== 0xff))
+		{
+			//skip clear page
+			FORMAT_DBG("NAND: _VirtualLogBlkRepair, skip page %x as clear page\n", i);
+			continue;
+		}
+
+
+		PHY_PageWrite(&tmpDstBlk);
+        result = PHY_SynchBank(tmpDstBlk.BankNum, SYNC_CHIP_MODE);
+        if(result < 0)
+        {
+            FORMAT_DBG("NAND: _VirtualLogBlkRepair, write page %x error\n", i);
+            FORMAT_ERR("NAND: Copy page write failed!\n");
+
+            return -1;
+        }
+    }
+
+    return 0;
+}
+
+static __s32 _VirtualLogBlkEccCheck(__u32 nDieNum, __u32 nSrcBlk, __u32 logtype)
+{
+    __s32 i, ret, ecc_error_cnt = 0;
+    struct __PhysicOpPara_t tmpSrcBlk;
+	struct __NandUserData_t *tmpSpare;
+
+	tmpSpare = (struct __NandUserData_t *)PHY_TMP_SPARE_CACHE;
+
+	tmpSrcBlk.SectBitmap = 0x3;
+	tmpSrcBlk.MDataPtr  = FORMAT_PAGE_BUF;
+	tmpSrcBlk.SDataPtr  = (void *)(tmpSpare);
+
+	if(SUPPORT_LOG_BLOCK_MANAGE&&(logtype == LSB_TYPE))
+	{
+		 //copy every page from source block to destination block
+	    for(i=PAGE_CNT_OF_SUPER_BLK - 1; i>=0; i--)
+	    {
+	    	if(lsb_page[i] == LSB_TYPE)
+	    	{
+	    		//calculate the physical operation paramter for the source page and destination page
+		        _CalculatePhyOpPar(&tmpSrcBlk, nDieNum * ZONE_CNT_OF_DIE, nSrcBlk, i);
+
+				//ret = PHY_PageRead(&tmpSrcBlk);
+				ret = PHY_PageReadSpare(&tmpSrcBlk);
+				if(ret == -ERR_ECC)
+				{
+					FORMAT_ERR("NAND: page %x ecc error, checking block %x\n", i, nSrcBlk);
+					ecc_error_cnt++;
+					break;
+
+				}
+				else if((tmpSpare->LogicInfo!= 0xffff)||(tmpSpare->LogicPageNum != 0xffff)||(tmpSpare->PageStatus != 0xff))
+				{
+					//find the last page
+					//break;
+				}
+				else if(ret<0)
+				{
+					FORMAT_ERR("NAND: page %x read error, checking block %x\n", i, nSrcBlk);
+				}
+
+	    	}
+			#if 0
+			else //for debug
+			{
+				//calculate the physical operation paramter for the source page and destination page
+		        _CalculatePhyOpPar(&tmpSrcBlk, nDieNum * ZONE_CNT_OF_DIE, nSrcBlk, i);
+
+				ret = PHY_PageRead(&tmpSrcBlk);
+				if(ret == -ERR_ECC)
+				{
+					FORMAT_ERR("NAND: page %x ecc error, checking block %x\n", i, nSrcBlk);
+					ecc_error_cnt++;
+					break;
+
+				}
+				else if((tmpSpare->LogicInfo!= 0xffff)||(tmpSpare->LogicPageNum != 0xffff)||(tmpSpare->PageStatus != 0xff))
+				{
+					//find the last page
+					FORMAT_ERR("NAND: msb page %x in block %x is not clear!\n", i, nSrcBlk);
+					FORMAT_DBG("NAND: LogicInfo: 0x%x, LogicPageNum: 0x%x, PageStatus: %x\n", tmpSpare->LogicInfo, tmpSpare->LogicPageNum, tmpSpare->PageStatus);
+				}
+				else if(ret<0)
+				{
+					FORMAT_ERR("NAND: page %x read error, checking block %x\n", i, nSrcBlk);
+				}
+			}
+			#endif
+
+		}
+    }
+	else
+	{
+		 //copy every page from source block to destination block
+	    for(i=0; i<PAGE_CNT_OF_SUPER_BLK; i++)
+	    {
+	        //calculate the physical operation paramter for the source page and destination page
+	        _CalculatePhyOpPar(&tmpSrcBlk, nDieNum * ZONE_CNT_OF_DIE, nSrcBlk, i);
+
+			ret = PHY_PageRead(&tmpSrcBlk);
+			if(ret == -ERR_ECC)
+			{
+				FORMAT_ERR("NAND: page %x ecc error, checking block %x\n", i, nSrcBlk);
+				ecc_error_cnt++;
+
+			} else if(ret<0)
+			{
+				FORMAT_ERR("NAND: page %x read error, checking block %x\n", i, nSrcBlk);
+			}
+	    }
+	}
+
+    return ecc_error_cnt;
+}
+
+static __s32 _VirtualFreeBlockCheck(__u32 nDieNum, __u32 nSrcBlk)
+{
+    __s32 ret;
+    struct __PhysicOpPara_t tmpSrcBlk;
+	struct __NandUserData_t *tmpSpare;
+
+	tmpSrcBlk.SectBitmap = FULL_BITMAP_OF_SUPER_PAGE;
+	tmpSrcBlk.MDataPtr  = FORMAT_PAGE_BUF;
+	tmpSrcBlk.SDataPtr  = (void *)(PHY_TMP_SPARE_CACHE);
+	tmpSpare = (struct __NandUserData_t *)(PHY_TMP_SPARE_CACHE);
+
+    //calculate the physical operation paramter for the source page and destination page
+    _CalculatePhyOpPar(&tmpSrcBlk, nDieNum * ZONE_CNT_OF_DIE, nSrcBlk, 0);
+
+	ret = PHY_PageReadSpare(&tmpSrcBlk);
+
+	if((tmpSpare->BadBlkFlag!=0xff)||(tmpSpare->LogicInfo !=0xffff)||(tmpSpare->LogicPageNum!=0xffff)||(tmpSpare->LogType!=0xff)||(tmpSpare->PageStatus!=0xff))
+	{
+		FORMAT_ERR("NAND: Error, check free block %x fail!\n", nSrcBlk);
+		FORMAT_DBG("NAND: Error, block %x is not clear!\n", nSrcBlk);
+		FORMAT_DBG("NAND: bad flag: %x, logicinfo: %x, logicpagenum: %x\n", tmpSpare->BadBlkFlag, tmpSpare->LogicInfo, tmpSpare->LogicPageNum);
+		FORMAT_DBG("NAND: pagestatus: %x, logtype: %x\n", tmpSpare->PageStatus, tmpSpare->LogType);
+		//while(1);
+		return -1;
+	}
+	else
+	{
+		FORMAT_DBG("NAND: check free block %x ok!\n", nSrcBlk);
+	}
+
+    return 0;
+}
+
+
+
 
 
 /*
@@ -539,7 +877,6 @@ static __s32 _WriteBadBlkFlag(__u32 nDieNum, __u32 nBlock)
     return 0;
 }
 
-
 #if DBG_DUMP_DIE_INFO
 
 /*
@@ -560,20 +897,20 @@ static void _DumpDieInfo(struct __ScanDieInfo_t *pDieInfo)
 	struct __LogBlkType_t   *tmpLogBlk;
 
     FORMAT_DBG("\n");
-    FORMAT_DBG("[FORMAT_DBG] ================== Die information ================\n");
-    FORMAT_DBG("[FORMAT_DBG]    Die number:         0x%x\n", pDieInfo->nDie);
-    FORMAT_DBG("[FORMAT_DBG]    Super block count:  0x%x\n", SuperBlkCntOfDie);
-    FORMAT_DBG("[FORMAT_DBG]    Free block count:   0x%x\n", pDieInfo->nFreeCnt);
-    FORMAT_DBG("[FORMAT_DBG]    Bad block count:    0x%x\n", pDieInfo->nBadCnt);
+    FORMAT_DBG("================== Die information ================\n");
+    FORMAT_DBG("   Die number:         0x%x\n", pDieInfo->nDie);
+    FORMAT_DBG("   Super block count:  0x%x\n", SuperBlkCntOfDie);
+    FORMAT_DBG("   Free block count:   0x%x\n", pDieInfo->nFreeCnt);
+    FORMAT_DBG("   Bad block count:    0x%x\n", pDieInfo->nBadCnt);
 
     for(tmpZone=0; tmpZone<ZONE_CNT_OF_DIE; tmpZone++)
     {
         tmpZoneInfo = &pDieInfo->ZoneInfo[tmpZone];
-        FORMAT_DBG("[FORMAT_DBG] ---------------------------------------------------\n");
-        FORMAT_DBG("[FORMAT_DBG] ZoneNum:    0x%x\n", tmpZone);
-        FORMAT_DBG("[FORMAT_DBG]    Data block Count:    0x%x\n", tmpZoneInfo->nDataBlkCnt);
-        FORMAT_DBG("[FORMAT_DBG]    Free block Count:    0x%x\n", tmpZoneInfo->nFreeBlkCnt);
-        FORMAT_DBG("[FORMAT_DBG]    Log block table: \n");
+        FORMAT_DBG("---------------------------------------------------\n");
+        FORMAT_DBG("ZoneNum:    0x%x\n", tmpZone);
+        FORMAT_DBG("   Data block Count:    0x%x\n", tmpZoneInfo->nDataBlkCnt);
+        FORMAT_DBG("   Free block Count:    0x%x\n", tmpZoneInfo->nFreeBlkCnt);
+        FORMAT_DBG("   Log block table: \n");
 		FORMAT_DBG("       [Index]             [LogicalBlk]         [LogBlk]        [DataBlk]\n");
         for(tmpLog=0; tmpLog<MAX_LOG_BLK_CNT; tmpLog++)
         {
@@ -585,7 +922,7 @@ static void _DumpDieInfo(struct __ScanDieInfo_t *pDieInfo)
         }
     }
 
-    FORMAT_DBG("[FORMAT_DBG] ===================================================\n");
+    FORMAT_DBG("===================================================\n");
 }
 
 #endif
@@ -664,7 +1001,10 @@ static __s32 _LeastBlkCntZone(struct __ScanDieInfo_t *pDieInfo)
         {
             if(tmpLogBlkTbl[i].LogicBlkNum != 0xffff)
             {
-                tmpBlkCnt++;
+            	if(tmpLogBlkTbl[i].LogBlkType == LSB_TYPE)
+					tmpBlkCnt += 2;
+				else
+                    tmpBlkCnt++;
             }
         }
 
@@ -793,84 +1133,154 @@ static __u32 _SearchBlkTblPst(__u32 nDieNum, __u32 nBlock)
 *               <  0    look for the last used page failed.
 ************************************************************************************************************************
 */
-static __s32 _GetLastUsedPage(__u32 nDieNum, __u32 nBlock)
+static __s32 _GetLastUsedPage(__u32 nDieNum, __u32 nBlock, __u32 log_type)
 {
     __s32   tmpLowPage, tmpHighPage, tmpMidPage, tmpPage, tmpUsedPage = 0;
     struct __NandUserData_t tmpSpare;
 
     //use bisearch algorithm to look for the last page in the used page group
-
-    if(SUPPORT_ALIGN_NAND_BNK)
+    //if(SUPPORT_LOG_BLOCK_MANAGE)
+    if(SUPPORT_LOG_BLOCK_MANAGE&&(log_type==LSB_TYPE))
     {
-        __u32   tmpBnkNum;
-        __u8    tmpPageStatus;
+    	//PRINT("    _GetLastUsedPage: block %x \n", nBlock);
+    	tmpPage = PAGE_CNT_OF_SUPER_BLK - 1;
+		while(tmpPage)
+		{
+			if(lsb_page[tmpPage] == LSB_TYPE)
+			{
+				_VirtualPageRead(nDieNum, nBlock, tmpPage, 0x3, FORMAT_PAGE_BUF, (void *)&tmpSpare);
+				//PRINT("    page %x, logicinfo: %x, pagestatus: %x \n", tmpPage, tmpSpare.LogicInfo, tmpSpare.PageStatus);
+				if((tmpSpare.LogicInfo != 0xffff) || (tmpSpare.LogicPageNum != 0xffff)||(tmpSpare.PageStatus!=0xff))
+	            {
+	                //current page is a used page
+	                break;
+	            }
+			}
 
-        tmpLowPage = 0;
-        tmpHighPage = PAGE_CNT_OF_PHY_BLK - 1;
+			tmpPage--;
+		}
 
-        while(tmpLowPage <= tmpHighPage)
-        {
-            tmpPageStatus = FREE_PAGE_MARK;
-            tmpMidPage = (tmpLowPage + tmpHighPage) / 2;
+		//for debug
+		#if 1
+		{
+			__u32 index;
+			__u32 test_err_flag = 0;
 
-            //if support bank align, there may be some free pages in the used page group
-            for(tmpBnkNum=0; tmpBnkNum<INTERLEAVE_BANK_CNT; tmpBnkNum++)
-            {
-                //read pages to check if the page is free
-                tmpPage = tmpMidPage * INTERLEAVE_BANK_CNT + tmpBnkNum;
-                _VirtualPageRead(nDieNum, nBlock, tmpPage, 0x3, FORMAT_PAGE_BUF, (void *)&tmpSpare);
+			for(index = 1; index<=2; index++)
+			{
+				if((tmpPage+index)<PAGE_CNT_OF_SUPER_BLK)
+				{
+					_VirtualPageRead(nDieNum, nBlock, tmpPage+index, 0x3, FORMAT_PAGE_BUF, (void *)&tmpSpare);
+					if((tmpSpare.LogicInfo != 0xffff) || (tmpSpare.LogicPageNum != 0xffff)||(tmpSpare.PageStatus!=0xff))
+		            {
+		                //current page is a used page
+		                FORMAT_ERR("NAND: lastpage + %d is not a clear page, lastpage: %x\n",index, tmpPage);
+						FORMAT_ERR("NAND: LogicInfo: 0x%x, LogicPageNum: 0x%x, PageStatus: %x\n", tmpSpare.LogicInfo, tmpSpare.LogicPageNum, tmpSpare.PageStatus);
+						test_err_flag = 1;
+		            }
+			    }
+			}
 
-                if((tmpSpare.PageStatus == FREE_PAGE_MARK) && (tmpSpare.LogicPageNum == 0xffff))
-                {
-                    //current page is a free page
-                    continue;
-                }
+			if(test_err_flag)
+			{
+				tmpPage = PAGE_CNT_OF_SUPER_BLK - 1;
+				while(tmpPage)
+				{
+					_VirtualPageRead(nDieNum, nBlock, tmpPage, 0x3, FORMAT_PAGE_BUF, (void *)&tmpSpare);
+					//PRINT("    page %x, logicinfo: %x, pagestatus: %x \n", tmpPage, tmpSpare.LogicInfo, tmpSpare.PageStatus);
+					if((tmpSpare.LogicInfo != 0xffff) || (tmpSpare.LogicPageNum != 0xffff)||(tmpSpare.PageStatus!=0xff))
+		            {
+		                //current page is a used page
+		                break;
+		            }
 
-                tmpPageStatus &= DATA_PAGE_MARK;
-                tmpUsedPage = tmpPage;
-            }
+					tmpPage--;
+				}
+			}
 
-            if(tmpPageStatus == FREE_PAGE_MARK)
-            {
-                //look for the last table group in the front pages
-                tmpHighPage = tmpMidPage - 1;
-            }
-            else
-            {
-                //look for the last table group in the hind pages
-                tmpLowPage = tmpMidPage + 1;
-            }
-        }
+		}
+		#endif
 
+
+		tmpUsedPage = tmpPage;
     }
-    else
-    {
+	else
+	{
+		if(SUPPORT_ALIGN_NAND_BNK)
+	    {
+	        __u32   tmpBnkNum;
+	        __u8    tmpPageStatus;
 
-        tmpLowPage = 0;
-        tmpHighPage = PAGE_CNT_OF_SUPER_BLK - 1;
+	        tmpLowPage = 0;
+	        tmpHighPage = PAGE_CNT_OF_PHY_BLK - 1;
 
-        while(tmpLowPage <= tmpHighPage)
-        {
-            tmpMidPage = (tmpLowPage + tmpHighPage) / 2;
+	        while(tmpLowPage <= tmpHighPage)
+	        {
+	            tmpPageStatus = FREE_PAGE_MARK;
+	            tmpMidPage = (tmpLowPage + tmpHighPage) / 2;
 
-            //get the spare area data of the page to check if the page is free
-            _VirtualPageRead(nDieNum, nBlock, tmpMidPage, 0x3, FORMAT_PAGE_BUF, (void *)&tmpSpare);
-            tmpUsedPage = tmpMidPage;
+	            //if support bank align, there may be some free pages in the used page group
+	            for(tmpBnkNum=0; tmpBnkNum<INTERLEAVE_BANK_CNT; tmpBnkNum++)
+	            {
+	                //read pages to check if the page is free
+	                tmpPage = tmpMidPage * INTERLEAVE_BANK_CNT + tmpBnkNum;
+	                _VirtualPageRead(nDieNum, nBlock, tmpPage, 0x3, FORMAT_PAGE_BUF, (void *)&tmpSpare);
 
-            if((tmpSpare.PageStatus == FREE_PAGE_MARK) && (tmpSpare.LogicPageNum == 0xffff))
-            {
-     		    //look for the last table group in the front pages
-                tmpHighPage = tmpMidPage - 1;
-                //tmpUsedPage = tmpMidPage;
-            }
-            else
-            {
-                //look for the last table group in the hind pages
-                tmpLowPage = tmpMidPage + 1;
-            }
-        }
+	                if((tmpSpare.PageStatus == FREE_PAGE_MARK) && (tmpSpare.LogicPageNum == 0xffff))
+	                {
+	                    //current page is a free page
+	                    continue;
+	                }
 
-    }
+	                tmpPageStatus &= DATA_PAGE_MARK;
+	                tmpUsedPage = tmpPage;
+	            }
+
+	            if(tmpPageStatus == FREE_PAGE_MARK)
+	            {
+	                //look for the last table group in the front pages
+	                tmpHighPage = tmpMidPage - 1;
+	            }
+	            else
+	            {
+	                //look for the last table group in the hind pages
+	                tmpLowPage = tmpMidPage + 1;
+	            }
+	        }
+
+	    }
+	    else
+	    {
+
+	        tmpLowPage = 0;
+	        tmpHighPage = PAGE_CNT_OF_SUPER_BLK - 1;
+
+	        while(tmpLowPage <= tmpHighPage)
+	        {
+	            tmpMidPage = (tmpLowPage + tmpHighPage) / 2;
+
+	            //get the spare area data of the page to check if the page is free
+	            _VirtualPageRead(nDieNum, nBlock, tmpMidPage, 0x3, FORMAT_PAGE_BUF, (void *)&tmpSpare);
+	            //tmpUsedPage = tmpMidPage;
+
+	            if((tmpSpare.PageStatus == FREE_PAGE_MARK) && (tmpSpare.LogicPageNum == 0xffff))
+	            {
+	     		    //look for the last table group in the front pages
+	                tmpHighPage = tmpMidPage - 1;
+	                //tmpUsedPage = tmpMidPage;
+	            }
+	            else
+	            {
+	                //look for the last table group in the hind pages
+	                tmpLowPage = tmpMidPage + 1;
+					tmpUsedPage = tmpMidPage;
+	            }
+	        }
+
+	    }
+	}
+
+
 
     return tmpUsedPage;
 }
@@ -919,13 +1329,21 @@ static __u32 _CalCheckSum(__u32 *pTblBuf, __u32 nLength)
 */
 static __s32 _GetBlkLogicInfo(struct __ScanDieInfo_t *pDieInfo)
 {
-    __u32   tmpBlkNum, tmpBnkNum, tmpPage, tmpBadFlag;
+    __u32   tmpBlkNum, tmpBnkNum, tmpPage, tmpBadFlag, result, tmpStartBlk;
     __s32   i;
     __s16   tmpPageNum[4];
     __u16   tmpLogicInfo;
-    __u32   spare_bitmap;
+    __u64   spare_bitmap;
     struct  __NandUserData_t tmpSpare[2];
 
+	if(pDieInfo->nDie == 0)
+    {
+        tmpStartBlk = DIE0_FIRST_BLK_NUM;
+    }
+    else
+    {
+        tmpStartBlk = 0;
+    }
 
     //initiate the number of the pages which need be read, the first page is read always, because the
     //the logical information is stored in the first page, other pages is read for check bad block flag
@@ -966,6 +1384,12 @@ static __s32 _GetBlkLogicInfo(struct __ScanDieInfo_t *pDieInfo)
         //initiate the bad block flag
         tmpBadFlag = 0;
 
+		if(tmpBlkNum<tmpStartBlk)
+		{
+			tmpBadFlag = 1;
+			continue;
+		}
+
         //the super block is composed of several physical blocks in several banks
         for(tmpBnkNum=0; tmpBnkNum<INTERLEAVE_BANK_CNT; tmpBnkNum++)
         {
@@ -980,16 +1404,53 @@ static __s32 _GetBlkLogicInfo(struct __ScanDieInfo_t *pDieInfo)
                 //calculate the number of the page in the super block to get spare data
                 tmpPage = tmpPageNum[i] * INTERLEAVE_BANK_CNT + tmpBnkNum;
                 //_VirtualPageRead(pDieInfo->nDie, tmpBlkNum, tmpPage, LOGIC_INFO_BITMAP, FORMAT_PAGE_BUF, (void *)&tmpSpare);
-                spare_bitmap = (SUPPORT_MULTI_PROGRAM ? (0x3 | (0x3 << SECTOR_CNT_OF_SINGLE_PAGE)) : 0x3);
-                _VirtualPageRead(pDieInfo->nDie, tmpBlkNum, tmpPage, spare_bitmap, FORMAT_PAGE_BUF, (void *)&tmpSpare);
+                spare_bitmap = (SUPPORT_MULTI_PROGRAM ? ((__u64)0x3 | ((__u64)0x3 << SECTOR_CNT_OF_SINGLE_PAGE)) : (__u64)0x3);
+                result = _VirtualPageRead(pDieInfo->nDie, tmpBlkNum, tmpPage, spare_bitmap, FORMAT_PAGE_BUF, (void *)&tmpSpare);
 
 				//check if the block is a bad block
-                if((tmpSpare[0].BadBlkFlag != 0xff) || (SUPPORT_MULTI_PROGRAM && (tmpSpare[1].BadBlkFlag != 0xff)))
-                {
-                    //set the bad flag of the physical block
-                    tmpBadFlag = 1;
-                }
+				if(NandStorageInfo.NandChipId[0]==0x45) //for sandisk 19nm flash bad blk scan
+				{
+					if(result==-ERR_ECC)
+					{
+						__u8* temp_mdata_ptr0 = (__u8*)FORMAT_PAGE_BUF;
+						__u8* temp_mdata_ptr1 = (__u8*)((__u32)FORMAT_PAGE_BUF + SECTOR_CNT_OF_SINGLE_PAGE*512);
 
+						if(((*temp_mdata_ptr0==0x00) && (*(temp_mdata_ptr0+1)==0x00) && (*(temp_mdata_ptr0+2)==0x00) && (*(temp_mdata_ptr0+3)==0x00) && (*(temp_mdata_ptr0+4)==0x00) && (*(temp_mdata_ptr0+5)==0x00))
+							||(SUPPORT_MULTI_PROGRAM && ((*temp_mdata_ptr1==0x00) && (*(temp_mdata_ptr1+1)==0x00) && (*(temp_mdata_ptr1+2)==0x00) && (*(temp_mdata_ptr1+3)==0x00) && (*(temp_mdata_ptr1+4)==0x00) && (*(temp_mdata_ptr1+5)==0x00))))
+						{
+							tmpBadFlag = 1;
+
+						}
+						else
+						{
+							if((tmpSpare[0].BadBlkFlag != 0xff) || (SUPPORT_MULTI_PROGRAM && (tmpSpare[1].BadBlkFlag != 0xff)))
+							{
+								tmpBadFlag = 1;
+
+							}
+						}
+
+
+					}
+					else
+					{
+						if((tmpSpare[0].BadBlkFlag != 0xff) || (SUPPORT_MULTI_PROGRAM && (tmpSpare[1].BadBlkFlag != 0xff)))
+						{
+							tmpBadFlag = 1;
+
+						}
+					}
+				}
+				else
+				{
+					if((tmpSpare[0].BadBlkFlag != 0xff) || (SUPPORT_MULTI_PROGRAM && (tmpSpare[1].BadBlkFlag != 0xff)))
+	                {
+	                    //set the bad flag of the physical block
+	                    tmpBadFlag = 1;
+
+	                }
+
+				}
                 if(tmpPage == 0)
                 {
                     //get the logical information of the physical block
@@ -1001,7 +1462,7 @@ static __s32 _GetBlkLogicInfo(struct __ScanDieInfo_t *pDieInfo)
         if(tmpBadFlag == 1)
         {
             //the physical block is a bad block, set bad block flag in the logical information buffer
-            FORMAT_DBG("[FORMAT_DBG] Find a bad block (NO. 0x%x) in the Die 0x%x\n", tmpBlkNum, pDieInfo->nDie);
+            FORMAT_DBG("NAND: Find a bad block (NO. 0x%x) in the Die 0x%x\n", tmpBlkNum, pDieInfo->nDie);
             pDieInfo->pPhyBlk[tmpBlkNum] = BAD_BLOCK_INFO;
 
             continue;
@@ -1041,6 +1502,31 @@ static __u8 _GetLogAge(__u32 nDie, __u16 nPhyBlk)
     return tmpLogAge;
 }
 
+static __u8 _GetLogType(__u32 nDie, __u16 nPhyBlk)
+{
+    __u8    tmpLogAge;
+    struct __NandUserData_t tmpSpareData;
+
+    //read the first page of the super block to get spare area data
+    _VirtualPageRead(nDie, nPhyBlk, 0, 0x3, FORMAT_PAGE_BUF, (void *)&tmpSpareData);
+
+    //the log age area is same as the page status area
+    tmpLogAge = tmpSpareData.LogType;
+
+    return tmpLogAge;
+}
+
+static __s32 _GetEccFlag(__u32 nDie, __u16 nPhyBlk)
+{
+    __s32    ecc_flag;
+    struct __NandUserData_t tmpSpareData;
+
+    //read the first page of the super block to get spare area data
+    ecc_flag = _VirtualPageRead(nDie, nPhyBlk, 0, 0x3, FORMAT_PAGE_BUF, (void *)&tmpSpareData);
+
+    return ecc_flag;
+}
+
 
 /*
 ************************************************************************************************************************
@@ -1064,17 +1550,25 @@ static __s32 _FillBlkToZoneTbl(struct __ScanDieInfo_t *pDieInfo, __u16 nLogicInf
 {
     __s32   i, tmpLogPst;
     __u32   tmpZone, tmpLogicBlk;
-    __u16   tmpDataBlk, tmpLogBlk, tmpNewBlk;
-    //__u8    tmpAgeData, tmpAgeLog, tmpAgeNew;
-    __u8    tmpAgeData, tmpAgeNew;
-    __s32   tmpLastPageOfData, tmpLastPageOfLog, tmpLastPageOfNew;
+    __u16   tmpDataBlk, tmpLogBlk, tmpNewBlk, tmpLogBlk0, tmpLogBlk2;
+    __u8    tmpLogTypeData, tmpLogTypeNew;
+    __u8    tmpAgeData, tmpAgeNew, tmpAge0, tmpAge2;
+    __s32   tmpLastPageOfData, tmpLastPageOfLog, tmpLastPageOfNew, tmpLastPage0, tmpLastPage2;
+	  __s32   tmpDatalogflag = 0, tmpnewlogflag = 0;
+	  __s32   tmpDataEcc = 0, tmpNewEcc=0;
     struct __SuperPhyBlkType_t *tmpSuperBlk;
+    __u32   eraseblockcnt = 0;
 
     tmpZone = GET_LOGIC_INFO_ZONE(nLogicInfo);
     tmpLogicBlk = GET_LOGIC_INFO_BLK(nLogicInfo);
     tmpSuperBlk = (struct __SuperPhyBlkType_t *)&pDieInfo->ZoneInfo[tmpZone].ZoneTbl[tmpLogicBlk];
 
-    *pEraseBlk = 0xffff;
+		eraseblockcnt = 0;
+    pEraseBlk[0] = 0xffff;
+    pEraseBlk[1] = 0xffff;
+    pEraseBlk[2] = 0xffff;
+    pEraseBlk[3] = 0xffff;
+
 
     //check if there is a data block in the data block table already
     if(tmpSuperBlk->PhyBlkNum == 0xffff)
@@ -1106,24 +1600,349 @@ static __s32 _FillBlkToZoneTbl(struct __ScanDieInfo_t *pDieInfo, __u16 nLogicInf
             break;
         }
     }
-    //if(tmpLogPst != -1)
-    //{
-        //get the log age from the log block
-    //    tmpAgeLog = _GetLogAge(pDieInfo->nDie, tmpLogBlk);
-    //}
+
+	if(SUPPORT_LOG_BLOCK_MANAGE)
+	{
+		  tmpLogTypeData = _GetLogType(pDieInfo->nDie, tmpDataBlk);
+    	tmpLogTypeNew = _GetLogType(pDieInfo->nDie, tmpNewBlk);
+	}
+	else
+	{
+		tmpLogTypeData = 0xff;
+		tmpLogTypeNew = 0xff;
+	}
+
+
+	if(((tmpLogTypeData&0xf) == LSB_TYPE)||((tmpLogTypeNew&0xf) == LSB_TYPE)||((tmpLogPst!= -1)&&(pDieInfo->ZoneInfo[tmpZone].LogBlkTbl[tmpLogPst].LogBlkType == LSB_TYPE)))
+	{
+		//look for a free empty item in the log block table
+    	if(tmpLogPst == -1)
+    	{
+            for(i=0; i<MAX_LOG_BLK_CNT; i++)
+            {
+                if(pDieInfo->ZoneInfo[tmpZone].LogBlkTbl[i].LogicBlkNum == 0xffff)
+                {
+                    //find and empty item in the log block table
+                    tmpLogPst = i;
+    				pDieInfo->ZoneInfo[tmpZone].LogBlkTbl[tmpLogPst].LogicBlkNum = GET_LOGIC_INFO_BLK(nLogicInfo);
+                    break;
+                }
+            }
+
+            if(tmpLogPst == -1)
+            {
+                //look for free item in the log block table failed, erase the new block
+                FORMAT_ERR("NAND: Error, log table full!\n");
+    			//while(1);
+                return -1;
+            }
+    	}
+
+    	pDieInfo->ZoneInfo[tmpZone].LogBlkTbl[tmpLogPst].LogBlkType = LSB_TYPE;
+
+		if(((tmpLogTypeNew&0xf) == LSB_TYPE)&&((tmpLogTypeData&0xf) != LSB_TYPE))
+		{
+			/*the new block is log block */
+			tmpnewlogflag = LSB_TYPE;
+		}
+		else if(((tmpLogTypeNew&0xf) != LSB_TYPE)&&((tmpLogTypeData&0xf) == LSB_TYPE))
+		{
+			/*the new block is data block, the data block is log block */
+			tmpSuperBlk->PhyBlkNum = tmpNewBlk;
+			tmpDatalogflag = LSB_TYPE;
+		}
+		else if(((tmpLogTypeNew&0xf) == LSB_TYPE)&&((tmpLogTypeData&0xf) == LSB_TYPE))
+		{
+			/*the new block & data block are both log block */
+			tmpSuperBlk->PhyBlkNum = 0xffff;
+	        tmpSuperBlk->BlkEraseCnt = 0xffff;
+	        pDieInfo->ZoneInfo[tmpZone].nDataBlkCnt--;
+
+			tmpnewlogflag = LSB_TYPE;
+			tmpDatalogflag = LSB_TYPE;
+		}
+		else
+		{
+			tmpDataEcc = _GetEccFlag(pDieInfo->nDie, tmpDataBlk);
+			tmpNewEcc = _GetEccFlag(pDieInfo->nDie, tmpNewBlk);
+
+			if((tmpDataEcc>=0)&&(tmpNewEcc<0))
+			{
+				*pEraseBlk = tmpNewBlk;
+				FORMAT_ERR("NAND: two data block, age: tmpData: %x, tmpAgeNew: %x \n", tmpAgeData, tmpAgeNew);
+				FORMAT_ERR("NAND: new block ecc error, Erase new block %x \n", tmpNewBlk);
+			}
+			else if((tmpNewEcc>=0)&&(tmpDataEcc<0))
+			{
+				tmpSuperBlk->PhyBlkNum = tmpNewBlk;
+	            *pEraseBlk = tmpDataBlk;
+				FORMAT_ERR("NAND: two data block, age: tmpData: %x, tmpAgeNew: %x \n", tmpAgeData, tmpAgeNew);
+				FORMAT_ERR("NAND: data block ecc error, Erase data block %x \n", tmpDataBlk);
+			}
+			else
+			{
+				if((tmpAgeData&0xff) == ((tmpAgeNew+2)&0xff))
+				{
+					tmpSuperBlk->PhyBlkNum = tmpNewBlk;
+		            *pEraseBlk = tmpDataBlk;
+					FORMAT_ERR("NAND: two data block 0, age: tmpData: %x, tmpAgeNew: %x \n", tmpAgeData, tmpAgeNew);
+					FORMAT_ERR("NAND: two data block 0, Erase data block %x with big age \n", tmpDataBlk);
+				}
+				else if(((tmpAgeData+2)&0xff) ==(tmpAgeNew&0xff))
+				{
+		            *pEraseBlk = tmpNewBlk;
+					FORMAT_ERR("NAND: two data block 1, age: tmpData: %x, tmpAgeNew: %x \n", tmpAgeData, tmpAgeNew);
+					FORMAT_ERR("NAND: two data block 1, Erase new block %x with big age \n", tmpNewBlk);
+				}
+				else
+				{
+					PRINT("NAND: Error, two data block with diffrent age: tmpData: %x, tmpAgeNew: %x \n", tmpAgeData, tmpAgeNew);
+					PRINT("NAND: logicnum: %x, data block: %x, new block: %x\n", pDieInfo->ZoneInfo[tmpZone].LogBlkTbl[tmpLogPst].LogicBlkNum, tmpDataBlk, tmpNewBlk);
+
+					//while(1);
+
+					if(tmpAgeData>tmpAgeNew)
+					{
+						tmpSuperBlk->PhyBlkNum = tmpNewBlk;
+			            *pEraseBlk = tmpDataBlk;
+						FORMAT_ERR("NAND: Error, two data block, age not seq: tmpData: %x, tmpAgeNew: %x \n", tmpAgeData, tmpAgeNew);
+						PRINT("NAND: Error, two data block, Erase data block %x with big age \n", tmpDataBlk);
+					}
+					else if(tmpAgeData<tmpAgeNew)
+					{
+						*pEraseBlk = tmpNewBlk;
+						FORMAT_ERR("NAND: Error, two data block, age: tmpData: %x, tmpAgeNew: %x \n", tmpAgeData, tmpAgeNew);
+						FORMAT_ERR("NAND: Error, two data block, Erase new block %x with big age \n", tmpNewBlk);
+					}
+					else
+					{
+						/*the new block & data block are both data block */
+						tmpLastPageOfData = _GetLastUsedPage(pDieInfo->nDie,tmpDataBlk, NORMAL_TYPE);
+						tmpLastPageOfNew = _GetLastUsedPage(pDieInfo->nDie,tmpNewBlk, NORMAL_TYPE);
+						if(tmpLastPageOfNew>tmpLastPageOfData)
+						{
+							//replace the the data block with the new block, because the new page has more used pages
+							tmpSuperBlk->PhyBlkNum = tmpNewBlk;
+				            *pEraseBlk = tmpDataBlk;
+							FORMAT_ERR("NAND: Error, two data block, Erase data block with less used page \n");
+						}
+						else
+						{
+							*pEraseBlk = tmpNewBlk;
+							FORMAT_ERR("NAND: Error, two data block, Erase new block with less used page \n");
+						}
+					}
+
+				}
+
+			}
+
+		}
+
+		//updata erase block info
+		if(*pEraseBlk!=0xffff)
+			eraseblockcnt++;
+
+		//fill log block table
+		if(tmpnewlogflag == LSB_TYPE)
+		{
+			if(((tmpLogTypeNew>>4)&0xf)==0) // log block0
+			{
+				if(pDieInfo->ZoneInfo[tmpZone].LogBlkTbl[tmpLogPst].PhyBlk.PhyBlkNum == 0xffff)
+				{
+					pDieInfo->ZoneInfo[tmpZone].LogBlkTbl[tmpLogPst].PhyBlk.PhyBlkNum = tmpNewBlk;
+				}
+				else if(pDieInfo->ZoneInfo[tmpZone].LogBlkTbl[tmpLogPst].PhyBlk2.PhyBlkNum == 0xffff)
+				{
+					pDieInfo->ZoneInfo[tmpZone].LogBlkTbl[tmpLogPst].PhyBlk2.PhyBlkNum = tmpNewBlk;
+				}
+				else
+				{
+					FORMAT_ERR("NAND: Error, tmpnewlogflag, log block0 full!\n");
+					if(_GetEccFlag(pDieInfo->nDie, pDieInfo->ZoneInfo[tmpZone].LogBlkTbl[tmpLogPst].PhyBlk.PhyBlkNum)<0)
+					{
+						*(pEraseBlk + eraseblockcnt) = pDieInfo->ZoneInfo[tmpZone].LogBlkTbl[tmpLogPst].PhyBlk.PhyBlkNum;
+				  	eraseblockcnt++;
+				  	pDieInfo->ZoneInfo[tmpZone].LogBlkTbl[tmpLogPst].PhyBlk.PhyBlkNum = tmpNewBlk;
+					}
+					else if(_GetEccFlag(pDieInfo->nDie, pDieInfo->ZoneInfo[tmpZone].LogBlkTbl[tmpLogPst].PhyBlk2.PhyBlkNum)<0)
+					{
+						*(pEraseBlk + eraseblockcnt) = pDieInfo->ZoneInfo[tmpZone].LogBlkTbl[tmpLogPst].PhyBlk2.PhyBlkNum;
+				  	eraseblockcnt++;
+				  	pDieInfo->ZoneInfo[tmpZone].LogBlkTbl[tmpLogPst].PhyBlk2.PhyBlkNum = tmpNewBlk;
+					}
+					else
+					{
+						*(pEraseBlk + eraseblockcnt) = tmpNewBlk;
+				  	eraseblockcnt++;
+					}
+
+					//while(1);
+				}
+
+			}
+			else  //log block1
+			{
+				if(pDieInfo->ZoneInfo[tmpZone].LogBlkTbl[tmpLogPst].PhyBlk1.PhyBlkNum == 0xffff)
+				{
+					pDieInfo->ZoneInfo[tmpZone].LogBlkTbl[tmpLogPst].PhyBlk1.PhyBlkNum = tmpNewBlk;
+				}
+				else
+				{
+					FORMAT_ERR("NAND: Error, tmpnewlogflag, log block1 full! tmpLogTypeNew: %x\n", tmpLogTypeNew);
+					FORMAT_ERR("NAND: Error, PhyBlkNum: %x! tmpNewBlk: %x\n", pDieInfo->ZoneInfo[tmpZone].LogBlkTbl[tmpLogPst].PhyBlk1.PhyBlkNum, tmpNewBlk);
+					//while(1);
+
+					if(_GetEccFlag(pDieInfo->nDie, pDieInfo->ZoneInfo[tmpZone].LogBlkTbl[tmpLogPst].PhyBlk1.PhyBlkNum)<0)
+					{
+						*(pEraseBlk + eraseblockcnt) = pDieInfo->ZoneInfo[tmpZone].LogBlkTbl[tmpLogPst].PhyBlk1.PhyBlkNum;
+						eraseblockcnt++;
+						pDieInfo->ZoneInfo[tmpZone].LogBlkTbl[tmpLogPst].PhyBlk1.PhyBlkNum = tmpNewBlk;
+					}
+					else
+					{
+						*(pEraseBlk + eraseblockcnt) = tmpNewBlk;
+						eraseblockcnt++;
+					}
+
+				}
+			}
+		}
+
+		if(tmpDatalogflag == LSB_TYPE)
+		{
+			if(((tmpLogTypeData>>4)&0xf)==0) // log block0
+			{
+				if(pDieInfo->ZoneInfo[tmpZone].LogBlkTbl[tmpLogPst].PhyBlk.PhyBlkNum == 0xffff)
+					pDieInfo->ZoneInfo[tmpZone].LogBlkTbl[tmpLogPst].PhyBlk.PhyBlkNum = tmpDataBlk;
+				else if(pDieInfo->ZoneInfo[tmpZone].LogBlkTbl[tmpLogPst].PhyBlk2.PhyBlkNum == 0xffff)
+					pDieInfo->ZoneInfo[tmpZone].LogBlkTbl[tmpLogPst].PhyBlk2.PhyBlkNum = tmpDataBlk;
+				else
+				{
+					FORMAT_ERR("NAND: Error, tmpDatalogflag, log block0 full!\n");
+
+					if(_GetEccFlag(pDieInfo->nDie, pDieInfo->ZoneInfo[tmpZone].LogBlkTbl[tmpLogPst].PhyBlk.PhyBlkNum)<0)
+					{
+						*(pEraseBlk + eraseblockcnt) = pDieInfo->ZoneInfo[tmpZone].LogBlkTbl[tmpLogPst].PhyBlk.PhyBlkNum;
+				  	eraseblockcnt++;
+				  	pDieInfo->ZoneInfo[tmpZone].LogBlkTbl[tmpLogPst].PhyBlk.PhyBlkNum = tmpDataBlk;
+					}
+					else if(_GetEccFlag(pDieInfo->nDie, pDieInfo->ZoneInfo[tmpZone].LogBlkTbl[tmpLogPst].PhyBlk2.PhyBlkNum)<0)
+					{
+						*(pEraseBlk + eraseblockcnt) = pDieInfo->ZoneInfo[tmpZone].LogBlkTbl[tmpLogPst].PhyBlk2.PhyBlkNum;
+				  	eraseblockcnt++;
+				  	pDieInfo->ZoneInfo[tmpZone].LogBlkTbl[tmpLogPst].PhyBlk2.PhyBlkNum = tmpDataBlk;
+					}
+					else
+					{
+						*(pEraseBlk + eraseblockcnt) = tmpDataBlk;
+				  	eraseblockcnt++;
+					}
+
+					//while(1);
+				}
+
+			}
+			else  //log block1
+			{
+				if(pDieInfo->ZoneInfo[tmpZone].LogBlkTbl[tmpLogPst].PhyBlk1.PhyBlkNum == 0xffff)
+					pDieInfo->ZoneInfo[tmpZone].LogBlkTbl[tmpLogPst].PhyBlk1.PhyBlkNum = tmpDataBlk;
+				else
+				{
+					FORMAT_ERR("NAND: Error, tmpDatalogflag, log block1 full! tmpLogTypeData: 0x%x\n", tmpLogTypeData);
+					if(_GetEccFlag(pDieInfo->nDie, pDieInfo->ZoneInfo[tmpZone].LogBlkTbl[tmpLogPst].PhyBlk1.PhyBlkNum)<0)
+					{
+						*(pEraseBlk + eraseblockcnt) = pDieInfo->ZoneInfo[tmpZone].LogBlkTbl[tmpLogPst].PhyBlk1.PhyBlkNum;
+				  	eraseblockcnt++;
+				  	pDieInfo->ZoneInfo[tmpZone].LogBlkTbl[tmpLogPst].PhyBlk1.PhyBlkNum = tmpDataBlk;
+					}
+					else
+					{
+						*(pEraseBlk + eraseblockcnt) = tmpDataBlk;
+				  	eraseblockcnt++;
+					}
+						//while(1);
+
+				}
+			}
+		}
+
+		//kick valid log block
+		if(pDieInfo->ZoneInfo[tmpZone].LogBlkTbl[tmpLogPst].PhyBlk2.PhyBlkNum != 0xffff)
+		{
+			tmpLogBlk0 = pDieInfo->ZoneInfo[tmpZone].LogBlkTbl[tmpLogPst].PhyBlk.PhyBlkNum;
+			tmpLogBlk2 = pDieInfo->ZoneInfo[tmpZone].LogBlkTbl[tmpLogPst].PhyBlk2.PhyBlkNum;
+			FORMAT_DBG("NAND: kick valid log block, tmpLogBlk0 %x, tmpLogBlk2 %x\n", tmpLogBlk0, tmpLogBlk2);
+
+			if(_GetEccFlag(pDieInfo->nDie, tmpLogBlk2)<0)
+			{
+				pDieInfo->ZoneInfo[tmpZone].LogBlkTbl[tmpLogPst].PhyBlk2.PhyBlkNum = 0xffff;
+		    *(pEraseBlk + eraseblockcnt) = tmpLogBlk2;
+				 eraseblockcnt++;
+			}
+			else if(_GetEccFlag(pDieInfo->nDie, tmpLogBlk0)<0)
+			{
+				pDieInfo->ZoneInfo[tmpZone].LogBlkTbl[tmpLogPst].PhyBlk.PhyBlkNum = tmpLogBlk2;
+				pDieInfo->ZoneInfo[tmpZone].LogBlkTbl[tmpLogPst].PhyBlk2.PhyBlkNum = 0xffff;
+				*(pEraseBlk + eraseblockcnt) = tmpLogBlk0;
+				eraseblockcnt++;
+			}
+			else
+			{
+				tmpAge0 = _GetLogAge(pDieInfo->nDie, tmpLogBlk0);
+				tmpAge2 = _GetLogAge(pDieInfo->nDie, tmpLogBlk2);
+
+				FORMAT_DBG("NAND: kick valid log block, tmpAge0 %x, tmpAge2 %x\n", tmpAge0, tmpAge2);
+
+				if(COMPARE_AGE(tmpAge0, tmpAge2) == 0)  //move merge stop
+				{
+					tmpLastPage0 = _GetLastUsedPage(pDieInfo->nDie, tmpLogBlk0, SUPPORT_LOG_BLOCK_MANAGE&LSB_TYPE);
+					tmpLastPage2 = _GetLastUsedPage(pDieInfo->nDie, tmpLogBlk2, SUPPORT_LOG_BLOCK_MANAGE&LSB_TYPE);
+
+					if(tmpLastPage0 < tmpLastPage2)
+			        {
+			            //replace the the data block with the new block, because the new page has more used pages
+			            pDieInfo->ZoneInfo[tmpZone].LogBlkTbl[tmpLogPst].PhyBlk.PhyBlkNum = tmpLogBlk2;
+						pDieInfo->ZoneInfo[tmpZone].LogBlkTbl[tmpLogPst].PhyBlk2.PhyBlkNum = 0xffff;
+						*(pEraseBlk + eraseblockcnt) = tmpLogBlk0;
+						eraseblockcnt++;
+
+						FORMAT_DBG("NAND: log age the same, Erase tmpLogBlk0 \n");
+			        }
+			        else
+			        {
+			            //the new block has less pages than the data block
+			            pDieInfo->ZoneInfo[tmpZone].LogBlkTbl[tmpLogPst].PhyBlk2.PhyBlkNum = 0xffff;
+			            *(pEraseBlk + eraseblockcnt) = tmpLogBlk2;
+					  			eraseblockcnt++;
+						FORMAT_DBG("NAND: log age the same, Erase tmpLogBlk0 \n");
+			        }
+				}
+				else
+				{
+					pDieInfo->ZoneInfo[tmpZone].LogBlkTbl[tmpLogPst].PhyBlk2.PhyBlkNum = 0xffff;
+					*(pEraseBlk + eraseblockcnt) = tmpLogBlk2;
+					eraseblockcnt++;
+					FORMAT_ERR("NAND: Error, log age diff, Erase tmpLogBlk2 \n");
+				}
+			}
+		}
+		return 0;
+	}
 
     //compare the log age of current block with the data block
     if(COMPARE_AGE(tmpAgeNew, tmpAgeData) == 0)
     {
         //the log age of current block is same as the data block
-        tmpLastPageOfData = _GetLastUsedPage(pDieInfo->nDie, tmpDataBlk);
-        tmpLastPageOfNew = _GetLastUsedPage(pDieInfo->nDie, tmpNewBlk);
+        tmpLastPageOfData = _GetLastUsedPage(pDieInfo->nDie, tmpDataBlk, SUPPORT_LOG_BLOCK_MANAGE&LSB_TYPE);
+        tmpLastPageOfNew = _GetLastUsedPage(pDieInfo->nDie, tmpNewBlk, SUPPORT_LOG_BLOCK_MANAGE&LSB_TYPE);
 
         if(tmpLastPageOfNew > tmpLastPageOfData)
         {
             //replace the the data block with the new block, because the new page has more used pages
             tmpSuperBlk->PhyBlkNum = tmpNewBlk;
             *pEraseBlk = tmpDataBlk;
+			FORMAT_DBG("NAND: two data block, erase data block %x with less pages\n", tmpDataBlk);
 
             return 0;
         }
@@ -1131,6 +1950,7 @@ static __s32 _FillBlkToZoneTbl(struct __ScanDieInfo_t *pDieInfo, __u16 nLogicInf
         {
             //the new block has less pages than the data block
             *pEraseBlk = tmpNewBlk;
+			FORMAT_DBG("NAND: two data block, erase new block %x with less pages\n", tmpNewBlk);
 
             return 0;
         }
@@ -1144,14 +1964,15 @@ static __s32 _FillBlkToZoneTbl(struct __ScanDieInfo_t *pDieInfo, __u16 nLogicInf
             if(tmpLogPst != -1)
             {
                 //there is a log block already, need check which block need be erased
-                tmpLastPageOfNew = _GetLastUsedPage(pDieInfo->nDie, tmpNewBlk);
-                tmpLastPageOfLog = _GetLastUsedPage(pDieInfo->nDie, tmpLogBlk);
+                tmpLastPageOfNew = _GetLastUsedPage(pDieInfo->nDie, tmpNewBlk, SUPPORT_LOG_BLOCK_MANAGE&LSB_TYPE);
+                tmpLastPageOfLog = _GetLastUsedPage(pDieInfo->nDie, tmpLogBlk, SUPPORT_LOG_BLOCK_MANAGE&LSB_TYPE);
 
-                if(tmpLastPageOfNew > tmpLastPageOfLog)
+				if(tmpLastPageOfNew > tmpLastPageOfLog)
                 {
                     //the new block has more used page than the log block, replace it
                     pDieInfo->ZoneInfo[tmpZone].LogBlkTbl[i].PhyBlk.PhyBlkNum = tmpNewBlk;
                     *pEraseBlk = tmpLogBlk;
+					FORMAT_DBG("NAND: two log block, erase log block %x with less pages\n", tmpDataBlk);
 
                     return 0;
                 }
@@ -1159,9 +1980,11 @@ static __s32 _FillBlkToZoneTbl(struct __ScanDieInfo_t *pDieInfo, __u16 nLogicInf
                 {
                     //the new block need be erased
                     *pEraseBlk = tmpNewBlk;
-
+					FORMAT_DBG("NAND: two log block, erase new block %x with less pages\n", tmpNewBlk);
+					
                     return 0;
                 }
+
             }
             else
             {
@@ -1188,19 +2011,19 @@ static __s32 _FillBlkToZoneTbl(struct __ScanDieInfo_t *pDieInfo, __u16 nLogicInf
                 {
                     //there is no free item in the log block table, add the log block failed, erase the block
                     *pEraseBlk = tmpNewBlk;
-
+					FORMAT_DBG("NAND: log block table full, erase new block %x \n", tmpNewBlk);
                     return 0;
                 }
             }
         }
         else
         {
-            FORMAT_DBG("[FORMAT_DBG] The log age of block(logicInfo:0x%x) are not sequential, "
+            FORMAT_DBG("NAND: The log age of block(logicInfo:0x%x) are not sequential, "
                 "age is:0x%x, 0x%x\n", nLogicInfo, tmpAgeData, tmpAgeNew);
 
             //the new block need be erased
             *pEraseBlk = tmpNewBlk;
-
+			FORMAT_DBG("NAND: log age not sequential, erase new block %x \n", tmpNewBlk);
             return 0;
         }
     }
@@ -1215,6 +2038,7 @@ static __s32 _FillBlkToZoneTbl(struct __ScanDieInfo_t *pDieInfo, __u16 nLogicInf
             {
                 //the log block should be erased
                 *pEraseBlk = tmpLogBlk;
+				FORMAT_DBG("NAND: log age too large, erase log block %x \n", tmpLogBlk);
             }
             else
             {
@@ -1233,7 +2057,7 @@ static __s32 _FillBlkToZoneTbl(struct __ScanDieInfo_t *pDieInfo, __u16 nLogicInf
                 {
                     //look for free item in the log block table failed, erase the new block
                     *pEraseBlk = tmpDataBlk;
-
+					FORMAT_DBG("NAND: log block table full, erase data block %x \n", tmpDataBlk);
                     return 0;
                 }
 
@@ -1248,19 +2072,19 @@ static __s32 _FillBlkToZoneTbl(struct __ScanDieInfo_t *pDieInfo, __u16 nLogicInf
         }
         else
         {
-            FORMAT_DBG("[FORMAT_DBG] The log age of block(logicInfo:0x%x) are not sequential, "
+            FORMAT_DBG("NAND: The log age of block(logicInfo:0x%x) are not sequential, "
                 "age is:0x%x, 0x%x\n", nLogicInfo, tmpAgeNew, tmpAgeData);
 
             //replace the data block with the new block, because the new block has a lower log age
             tmpSuperBlk->PhyBlkNum = tmpNewBlk;
             //the data block need be erased
             *pEraseBlk = tmpDataBlk;
-
+			FORMAT_DBG("NAND: log age not sequential, erase data block %x \n", tmpDataBlk);
             return 0;
         }
     }
 
-    //return 0;
+	return 0;
 }
 
 
@@ -1355,7 +2179,7 @@ static __s32 _GetNewTableBlk(struct __ScanDieInfo_t *pDieInfo, __u32 nZone)
     if(tmpFreeBlk < 0)
     {
         //look for a free block failed, there is too less free block
-        FORMAT_ERR("[FORMAT_ERR] Look for a free block  failed, not enough valid blocks\n");
+        FORMAT_ERR("NAND: Look for a free block  failed, not enough valid blocks\n");
 
         return -1;
     }
@@ -1461,7 +2285,7 @@ static __s32 _GetNewTableBlk(struct __ScanDieInfo_t *pDieInfo, __u32 nZone)
     else
     {
         //look for a valid block in the table block area for table failed
-        FORMAT_DBG("[FORMAT_DBG] Look for a block in table block area for table failed\n");
+        FORMAT_DBG("NAND: Look for a block in table block area for table failed\n");
 
         return tmpFreeBlk;
     }
@@ -1518,7 +2342,7 @@ static __s32 _GetMapTblBlock(struct __ScanDieInfo_t *pDieInfo)
         if(result < 0)
         {
             //get new physical block in table area for saving block mapping table failed
-            FORMAT_ERR("[FORMAT_ERR] Get new physical block for mapping table failed in die 0x%x!\n", pDieInfo->nDie);
+            FORMAT_ERR("NAND: Get new physical block for mapping table failed in die 0x%x!\n", pDieInfo->nDie);
             return -1;
         }
 
@@ -1613,9 +2437,10 @@ static __s32 _KickValidTblBlk(struct __ScanDieInfo_t *pDieInfo)
 */
 static __s32 _RepairLogBlkTbl(struct __ScanDieInfo_t *pDieInfo)
 {
-
-    __s32 i, tmpZone, tmpLastUsedPage;
+    __s32 i, tmpZone, tmpLastUsedPage, result, ecc_flag = 0;
     struct __LogBlkType_t *tmpLogTbl;
+	__u32 tmpLogBlock;
+	__s32 tmpStartBlk, tmpFreeBlock;
 
     for(tmpZone=0; tmpZone<ZONE_CNT_OF_DIE; tmpZone++)
     {
@@ -1629,13 +2454,215 @@ static __s32 _RepairLogBlkTbl(struct __ScanDieInfo_t *pDieInfo)
 
         for(i=0; i<MAX_LOG_BLK_CNT; i++)
         {
+        	ecc_flag = 0;
             if(tmpLogTbl->LogicBlkNum != 0xffff)
             {
-                tmpLastUsedPage = _GetLastUsedPage(pDieInfo->nDie, tmpLogTbl->PhyBlk.PhyBlkNum);
+            	if((SUPPORT_LOG_BLOCK_MANAGE)&&(tmpLogTbl->LogBlkType == LSB_TYPE))
+            	{
+            		if(tmpLogTbl->PhyBlk1.PhyBlkNum != 0xffff )
+						tmpLogTbl->WriteBlkIndex = 1;
+					else
+					{
+					    if(pDieInfo->nDie == 0)
+					    {
+					        tmpStartBlk = DIE0_FIRST_BLK_NUM;
+					    }
+					    else
+					    {
+					        tmpStartBlk = 0;
+					    }
 
-                tmpLogTbl->LastUsedPage = tmpLastUsedPage;
+					    //try to find a free block in the block mapping table block area
+					    //for(tmpFreeBlock=tmpStartBlk; tmpFreeBlock<SuperBlkCntOfDie; tmpFreeBlock++)
+					    for(tmpFreeBlock=SuperBlkCntOfDie-1; tmpFreeBlock>=0; tmpFreeBlock--)
+					    {
+					        if(pDieInfo->pPhyBlk[tmpFreeBlock] == FREE_BLOCK_INFO)
+					        {
+					            //find a free block in the table block area
+					            if(_VirtualFreeBlockCheck(pDieInfo->nDie, tmpFreeBlock)==0)
+					            {
+						            //pDieInfo->pPhyBlk[tmpFreeBlock] = pDieInfo->pPhyBlk[tmpLogTbl->PhyBlk.PhyBlkNum];
+						            pDieInfo->pPhyBlk[tmpFreeBlock] = NULL_BLOCK_INFO;
+						            pDieInfo->nFreeCnt--;
+									break;
+								}
+					        }
+					    }
+
+						tmpLogTbl->PhyBlk1.PhyBlkNum = tmpFreeBlock;
+						tmpLogTbl->WriteBlkIndex = 0;
+
+					}
+				}
+
+#ifdef LOG_BLOCK_ECC_CHECK
+				//check all page
+				//PRINT("log blk0 last used page: %x\n", tmpLastUsedPage);
+				#ifndef NORMAL_LOG_BLOCK_ECC_CHECK
+				if((SUPPORT_LOG_BLOCK_MANAGE)&&(tmpLogTbl->LogBlkType == LSB_TYPE))
+				#else
+				if(1)
+				#endif
+				{
+					if((SUPPORT_LOG_BLOCK_MANAGE)&&(tmpLogTbl->LogBlkType == LSB_TYPE)&&(tmpLogTbl->WriteBlkIndex == 1))
+						tmpLogBlock = tmpLogTbl->PhyBlk1.PhyBlkNum;
+					else
+						tmpLogBlock = tmpLogTbl->PhyBlk.PhyBlkNum;
+
+					result = _VirtualLogBlkEccCheck(pDieInfo->nDie, tmpLogBlock, tmpLogTbl->LogBlkType);
+					if(result)
+					{
+						ecc_flag = 1;
+						FORMAT_DBG("NAND: Logic Block %x, log blk: %x, %x page ecc check error\n", tmpLogTbl->LogicBlkNum, tmpLogBlock, result);
+					}
+
+					if(ecc_flag)
+					{
+						PRINT("[NAND ECC Repair] logrepair, find a ecc error in log block, need to repair the block\n");
+						if(pDieInfo->nDie == 0)
+						{
+							tmpStartBlk = DIE0_FIRST_BLK_NUM;
+						}
+						else
+						{
+							tmpStartBlk = 0;
+						}
+
+						//try to find a free block in the block mapping table block area
+						//for(tmpFreeBlock=tmpStartBlk; tmpFreeBlock<SuperBlkCntOfDie; tmpFreeBlock++)
+						for(tmpFreeBlock=SuperBlkCntOfDie-1; tmpFreeBlock>=0; tmpFreeBlock--)
+						{
+							if(pDieInfo->pPhyBlk[tmpFreeBlock] == FREE_BLOCK_INFO)
+							{
+								//find a free block in the table block area
+								if(_VirtualFreeBlockCheck(pDieInfo->nDie, tmpFreeBlock)==0)
+								{
+									//pDieInfo->pPhyBlk[tmpFreeBlock] = pDieInfo->pPhyBlk[tmpLogBlock];
+									pDieInfo->pPhyBlk[tmpFreeBlock] = NULL_BLOCK_INFO;
+									pDieInfo->nFreeCnt--;
+
+									break;
+								}
+
+							}
+						}
+
+						_VirtualLogBlkRepair(pDieInfo->nDie,tmpLogBlock,tmpFreeBlock,PAGE_CNT_OF_SUPER_BLK -1);
+
+						_VirtualBlockErase(pDieInfo->nDie,tmpLogBlock);
+						pDieInfo->pPhyBlk[tmpLogBlock] = FREE_BLOCK_INFO;
+						pDieInfo->nFreeCnt++;
+						if(tmpLogTbl->WriteBlkIndex == 1)
+							tmpLogTbl->PhyBlk1.PhyBlkNum = tmpFreeBlock;
+						else
+							tmpLogTbl->PhyBlk.PhyBlkNum = tmpFreeBlock;
+						tmpLogBlock = tmpFreeBlock;
+					}
+				}
+#endif
+
+#ifdef LOG_AGE_SEQ_CHECK
+				if((SUPPORT_LOG_BLOCK_MANAGE)&&(tmpLogTbl->LogBlkType == LSB_TYPE))
+				{
+					__u32 tmpDataBlk, tmpLog0, tmpLog1, tmpDataAge, tmpLogAge0, tmpLogAge1;
+
+					tmpDataBlk = pDieInfo->ZoneInfo[tmpZone].ZoneTbl[tmpLogTbl->LogicBlkNum].PhyBlkNum;
+					tmpLog0 = tmpLogTbl->PhyBlk.PhyBlkNum;
+					tmpLog1 = tmpLogTbl->PhyBlk1.PhyBlkNum;
+
+					if(tmpDataBlk!=0xffff)
+						tmpDataAge = _GetLogAge(pDieInfo->nDie,tmpDataBlk);
+					else
+					{
+						tmpDataAge = 0;
+						FORMAT_ERR("NAND: Error,LogicBlockNum: %x, Data block lost\n", tmpLogTbl->LogicBlkNum);
+						//while(1);
+					}
+
+					if(tmpLog0!=0xffff)
+						tmpLogAge0 = _GetLogAge(pDieInfo->nDie,tmpLog0);
+					else
+					{
+						FORMAT_ERR("NAND: Error, LogicBlockNum: %x, log block 0 lost\n", tmpLogTbl->LogicBlkNum);
+						//while(1);
+
+						if(tmpLog1 != 0xffff)
+						{
+							_VirtualBlockErase(pDieInfo->nDie,tmpLog1);
+							pDieInfo->pPhyBlk[tmpLog1] = FREE_BLOCK_INFO;
+							pDieInfo->nFreeCnt++;
+
+							//clear log table
+							MEMSET(tmpLogTbl, 0xff, sizeof(struct __LogBlkType_t));
+
+							tmpLogTbl->LogBlkType = 0;
+							tmpLogTbl->WriteBlkIndex= 0;
+							tmpLogTbl->ReadBlkIndex= 0;
+							FORMAT_DBG("NAND: log table repair,LogicBlockNum: %x, log0 lost, log0: %x, log1: %x, erase log1\n", tmpLogTbl->LogicBlkNum, tmpLog0, tmpLog1);
+						}
+					}
+
+					if((tmpLog0!=0xffff)&&((tmpDataAge+1)&0xff)!=(tmpLogAge0&0xff))
+					{
+						if(((tmpLogAge0+1)&0xff)==(tmpDataAge&0xff))
+						{
+							_VirtualBlockErase(pDieInfo->nDie,tmpLog0);
+							pDieInfo->pPhyBlk[tmpLog0] = FREE_BLOCK_INFO;
+							pDieInfo->nFreeCnt++;
+
+							if(tmpLog1 != 0xffff)
+							{
+								_VirtualBlockErase(pDieInfo->nDie,tmpLog1);
+								pDieInfo->pPhyBlk[tmpLog1] = FREE_BLOCK_INFO;
+								pDieInfo->nFreeCnt++;
+							}
+
+							//clear log table
+							MEMSET(tmpLogTbl, 0xff, sizeof(struct __LogBlkType_t));
+
+							tmpLogTbl->LogBlkType = 0;
+							tmpLogTbl->WriteBlkIndex= 0;
+							tmpLogTbl->ReadBlkIndex= 0;
+							FORMAT_DBG("NAND: log table repair,LogicBlockNum: %x, log0 age not seq, data: %x, log0: %x, erase log blocks\n", tmpLogTbl->LogicBlkNum, tmpDataAge, tmpLogAge0);
+
+						}
+						else
+						{
+							FORMAT_ERR("NAND: Error, log table repair,LogicBlockNum: %x, log0 age not seq, data: %x, log0: %x\n", tmpLogTbl->LogicBlkNum, tmpDataAge, tmpLogAge0);
+							//while(1);
+						}
+					}
+
+					if((tmpLog0!=0xffff)&&(tmpLogTbl->WriteBlkIndex == 1))
+					{
+						tmpLogAge1 = _GetLogAge(pDieInfo->nDie,tmpLog1);
+						if((tmpLogAge1!=tmpLogAge0)&&(tmpLogAge1!=0xaa))
+						{
+							FORMAT_ERR("NAND: Error, log table repair,LogicBlockNum: %x, log age diff, log0: %x, log1: %x\n", tmpLogTbl->LogicBlkNum, tmpLogAge0, tmpLogAge1);
+							//while(1);
+						}
+					}
+				}
+#endif
+
+				if((SUPPORT_LOG_BLOCK_MANAGE)&&(tmpLogTbl->LogBlkType == LSB_TYPE)&&(tmpLogTbl->WriteBlkIndex == 1))
+					tmpLogBlock = tmpLogTbl->PhyBlk1.PhyBlkNum;
+				else
+					tmpLogBlock = tmpLogTbl->PhyBlk.PhyBlkNum;
+
+				tmpLastUsedPage = _GetLastUsedPage(pDieInfo->nDie, tmpLogBlock, tmpLogTbl->LogBlkType);
+	        	tmpLogTbl->LastUsedPage = tmpLastUsedPage;
+
+				FORMAT_DBG("NAND: Log Block Index %x, LogicBlockNum: %x, LogBlockType: %x\n", i, tmpLogTbl->LogicBlkNum, tmpLogTbl->LogBlkType);
+				FORMAT_DBG("NAND: log0: %x, Log1: %x, WriteIndex: %x\n",tmpLogTbl->PhyBlk.PhyBlkNum, tmpLogTbl->PhyBlk1.PhyBlkNum, tmpLogTbl->WriteBlkIndex);
+				FORMAT_DBG("NAND: datablock: %x, lastusedpage: %x\n", pDieInfo->ZoneInfo[tmpZone].ZoneTbl[tmpLogTbl->LogicBlkNum].PhyBlkNum ,tmpLogTbl->LastUsedPage);
+				if((tmpLogTbl->PhyBlk1.PhyBlkNum != 0xffff)&&(tmpLogTbl->LogBlkType != LSB_TYPE))
+				{
+					FORMAT_ERR("NAND: Error, log type error!\n");
+					//while(1);
+				}
+
             }
-
             tmpLogTbl++;
         }
     }
@@ -1665,6 +2692,7 @@ static __s32 _DistributeFreeBlk(struct __ScanDieInfo_t *pDieInfo)
 
     struct __SuperPhyBlkType_t *tmpZoneTbl;
 
+
     //initiate the first super block of the die
     if(pDieInfo->nDie == 0)
     {
@@ -1674,6 +2702,7 @@ static __s32 _DistributeFreeBlk(struct __ScanDieInfo_t *pDieInfo)
     {
         pDieInfo->nFreeIndex = 0;
     }
+
 
     //look for free block to fill the empty item in the data block table
     for(tmpZone=0; tmpZone<ZONE_CNT_OF_DIE; tmpZone++)
@@ -1687,7 +2716,7 @@ static __s32 _DistributeFreeBlk(struct __ScanDieInfo_t *pDieInfo)
         //check if the free block is enough to fill the empty item in the data block table
         if(pDieInfo->nFreeCnt < (DATA_BLK_CNT_OF_ZONE - pDieInfo->ZoneInfo[tmpZone].nDataBlkCnt))
         {
-            FORMAT_ERR("[FORMAT_ERR] There is not enough valid block for using!\n");
+            FORMAT_ERR("NAND: There is not enough valid block for using!\n");
 
             return -1;
         }
@@ -1705,7 +2734,7 @@ static __s32 _DistributeFreeBlk(struct __ScanDieInfo_t *pDieInfo)
                 tmpFreeBlk = _GetFreeBlkFromDieInfo(pDieInfo);
                 if(tmpFreeBlk < 0)
                 {
-                    FORMAT_ERR("[FORMAT_ERR] There is not enough valid block for using!\n");
+                    FORMAT_ERR("NAND: There is not enough valid block for using!\n");
 
                     return -1;
                 }
@@ -1743,8 +2772,11 @@ static __s32 _DistributeFreeBlk(struct __ScanDieInfo_t *pDieInfo)
         else
         {
             FORMAT_DBG("[FORMAT_WARNNING] There is some blocks more than we used!\n");
+			//add by neil, 20120927
+			break;
         }
     }
+
 
     return 0;
 
@@ -1767,7 +2799,7 @@ static __s32 _DistributeFreeBlk(struct __ScanDieInfo_t *pDieInfo)
 static __s32 _FillZoneTblInfo(struct __ScanDieInfo_t *pDieInfo)
 {
     __u16   tmpLogicInfo;
-    __u32   tmpPhyBlk, tmpBlkErase;
+    __u32   i, tmpPhyBlk, tmpBlkErase[8];
     __s32   result;
 
     //calculte the first block is used in the die
@@ -1791,7 +2823,7 @@ static __s32 _FillZoneTblInfo(struct __ScanDieInfo_t *pDieInfo)
         {
             if(tmpLogicInfo == FREE_BLOCK_INFO)
             {
-                FORMAT_DBG("[FORMAT_DBG] mark the last block as bad block \n");
+                FORMAT_DBG("NAND: mark the last block as bad block \n");
                 pDieInfo->pPhyBlk[tmpPhyBlk] = BAD_BLOCK_INFO;
                 _WriteBadBlkFlag(pDieInfo->nDie, tmpPhyBlk);
 
@@ -1829,7 +2861,7 @@ static __s32 _FillZoneTblInfo(struct __ScanDieInfo_t *pDieInfo)
                 else
                 {
                     //the boot type block should be in the die0, in other die is invalid
-                    FORMAT_DBG("[FORMAT_DBG] Find a boot type block(0x%x) not in die0!\n", tmpPhyBlk);
+                    FORMAT_DBG("NAND: Find a boot type block(0x%x) not in die0!\n", tmpPhyBlk);
                     //erase the super block for other use
                     result = _VirtualBlockErase(pDieInfo->nDie, tmpPhyBlk);
                     if(result < 0)
@@ -1861,7 +2893,7 @@ static __s32 _FillZoneTblInfo(struct __ScanDieInfo_t *pDieInfo)
                 else
                 {
                     //the block mapping table block is invalid, need erase it for other use
-                    FORMAT_DBG("[FORMAT_DBG] Find an invalid block mapping table in Die 0x%x !\n", pDieInfo->nDie);
+                    FORMAT_DBG("NAND: Find an invalid block mapping table in Die 0x%x !\n", pDieInfo->nDie);
 
                     result = _VirtualBlockErase(pDieInfo->nDie, tmpPhyBlk);
                     if(result < 0)
@@ -1883,7 +2915,7 @@ static __s32 _FillZoneTblInfo(struct __ScanDieInfo_t *pDieInfo)
             else
             {
                 //the block is an unrecgnized special block, need erased it for other used
-                FORMAT_DBG("[FORMAT_DBG] Find an recgnized special type block in die 0x%x!\n", pDieInfo->nDie);
+                FORMAT_DBG("NAND: Find an recgnized special type block in die 0x%x!\n", pDieInfo->nDie);
 
                 result = _VirtualBlockErase(pDieInfo->nDie, tmpPhyBlk);
                 if(result < 0)
@@ -1932,26 +2964,37 @@ static __s32 _FillZoneTblInfo(struct __ScanDieInfo_t *pDieInfo)
         }
 
         //fill the physical block to the zone table which the block is belonged to
-        result = _FillBlkToZoneTbl(pDieInfo, tmpLogicInfo, tmpPhyBlk, &tmpBlkErase);
-        if(tmpBlkErase != 0xffff)
+        result = _FillBlkToZoneTbl(pDieInfo, tmpLogicInfo, tmpPhyBlk, &tmpBlkErase[0]);
+        for(i=0;i<4;i++)
         {
-            //fill the physical block to the zone table failed, erase it for other use
-            result = _VirtualBlockErase(pDieInfo->nDie, tmpBlkErase);
-            if(result < 0)
-            {
-                //erase the virtual block failed, the block is a bad block, need write bad block flag
-                pDieInfo->pPhyBlk[tmpBlkErase] = BAD_BLOCK_INFO;
-                _WriteBadBlkFlag(pDieInfo->nDie, tmpBlkErase);
+        	if(tmpBlkErase[i] != 0xffff)
+	        {
+	        	PRINT("Erase block %x after _FillBlkToZoneTbl \n", tmpBlkErase[i]);
+	            //fill the physical block to the zone table failed, erase it for other use
+	            result = _VirtualBlockErase(pDieInfo->nDie, tmpBlkErase[i]);
+	            if(result < 0)
+	            {
+	                //erase the virtual block failed, the block is a bad block, need write bad block flag
+	                pDieInfo->pPhyBlk[tmpBlkErase[i]] = BAD_BLOCK_INFO;
+	                _WriteBadBlkFlag(pDieInfo->nDie, tmpBlkErase[i]);
 
-                continue;
-            }
+	                //continue;
+	            }
 
-            //the block will be a new free block, modify the logical information
-            pDieInfo->pPhyBlk[tmpBlkErase] = FREE_BLOCK_INFO;
-            pDieInfo->nFreeCnt++;
+	            //the block will be a new free block, modify the logical information
+	            pDieInfo->pPhyBlk[tmpBlkErase[i]] = FREE_BLOCK_INFO;
+	            pDieInfo->nFreeCnt++;
 
-            continue;
+	            //continue;
+	        }
+	        else
+	        	break;
+
         }
+
+        continue;
+
+
     }
 
 #if DBG_DUMP_DIE_INFO
@@ -2015,7 +3058,7 @@ static __s32 _WriteBlkMapTbl(struct __ScanDieInfo_t *pDieInfo)
             result = _VirtualBlockErase(pDieInfo->nDie, tmpTblBlk);
             if(result < 0)
             {
-                FORMAT_DBG("[FORMAT_DBG] Erase block failed when write block mapping table!\n");
+                FORMAT_DBG("NAND: Erase block failed when write block mapping table!\n");
                 //erase the virtual block failed, the block is a bad block, need write bad block flag
                 _WriteBadBlkFlag(pDieInfo->nDie, tmpTblBlk);
 
@@ -2067,7 +3110,7 @@ static __s32 _WriteBlkMapTbl(struct __ScanDieInfo_t *pDieInfo)
                             FULL_BITMAP_OF_SUPER_PAGE, FORMAT_PAGE_BUF, (void *)tmpSpare);
         if(result < 0)
         {
-            FORMAT_DBG("[FORMAT_DBG] Write page failed when write block mapping table!\n");
+            FORMAT_DBG("NAND: Write page failed when write block mapping table!\n");
             //write page failed, the block is a bad block, need write bad block flag
             _WriteBadBlkFlag(pDieInfo->nDie, tmpTblBlk);
 
@@ -2080,7 +3123,7 @@ static __s32 _WriteBlkMapTbl(struct __ScanDieInfo_t *pDieInfo)
                             FULL_BITMAP_OF_SUPER_PAGE, FORMAT_PAGE_BUF, (void *)tmpSpare);
         if(result < 0)
         {
-            FORMAT_DBG("[FORMAT_DBG] Write page failed when write block mapping table!\n");
+            FORMAT_DBG("NAND: Write page failed when write block mapping table!\n");
             //write page failed, the block is a bad block, need write bad block flag
             _WriteBadBlkFlag(pDieInfo->nDie, tmpTblBlk);
 
@@ -2097,7 +3140,7 @@ static __s32 _WriteBlkMapTbl(struct __ScanDieInfo_t *pDieInfo)
                             FULL_BITMAP_OF_SUPER_PAGE, FORMAT_PAGE_BUF, (void *)tmpSpare);
         if(result < 0)
         {
-            FORMAT_DBG("[FORMAT_DBG] Write page failed when write block mapping table!\n");
+            FORMAT_DBG("NAND: Write page failed when write block mapping table!\n");
             //write page failed, the block is a bad block, need write bad block flag
             _WriteBadBlkFlag(pDieInfo->nDie, tmpTblBlk);
 
@@ -2133,14 +3176,13 @@ static __s32 _SearchZoneTbls(struct __ScanDieInfo_t *pDieInfo)
     struct  __NandUserData_t tmpSpareData[2];
     struct  __SuperPhyBlkType_t *tmpDataBlkTbl;
 
-    FORMAT_DBG("[FORMAT_DBG] Search the block mapping table on DIE 0x%x\n", pDieInfo->nDie);
+    FORMAT_DBG("NAND: Search the block mapping table on DIE 0x%x\n", pDieInfo->nDie);
 
     if(pDieInfo->nDie == 0)
     {
         //some physical blocks of die 0 is used for boot, so need ignore this blocks for efficiency
         tmpSuperBlk = DIE0_FIRST_BLK_NUM;
-    }
-    else
+    } else
     {
         //the physical blocks of other die all used for block mapping
         tmpSuperBlk = 0;
@@ -2204,7 +3246,7 @@ static __s32 _SearchZoneTbls(struct __ScanDieInfo_t *pDieInfo)
         if(FORMAT_PAGE_BUF[0] != 0xff)
         {
             //the block mapping table is invalid
-            FORMAT_DBG("[FORMAT_DBG] Find the table block %d for zone 0x%x of die 0x%x, but the table is invalid!\n",
+            FORMAT_DBG("NAND: Find the table block %d for zone 0x%x of die 0x%x, but the table is invalid!\n",
                         tmpSuperBlk,tmpZoneInDie, pDieInfo->nDie);
             continue;
         }
@@ -2220,7 +3262,7 @@ static __s32 _SearchZoneTbls(struct __ScanDieInfo_t *pDieInfo)
         if(tmpVar != ((__u32 *)tmpDataBlkTbl)[BLOCK_CNT_OF_ZONE - 1])
         {
             //the checksum of the data block table is invalid
-            FORMAT_DBG("[FORMAT_DBG] Find the table block %d for zone 0x%x of die 0x%x,"
+            FORMAT_DBG("NAND: Find the table block %d for zone 0x%x of die 0x%x,"
                        " but the data block table is invalid!\n",tmpSuperBlk,tmpZoneInDie, pDieInfo->nDie);
 
             //release the data block table buffer
@@ -2236,7 +3278,7 @@ static __s32 _SearchZoneTbls(struct __ScanDieInfo_t *pDieInfo)
         if(tmpVar != ((__u32 *)FORMAT_PAGE_BUF)[511])
         {
             //the checksum of the log block table is invalid
-            FORMAT_DBG("[FORMAT_DBG] Find the table block for zone 0x%x of die 0x%x,"
+            FORMAT_DBG("NAND: Find the table block for zone 0x%x of die 0x%x,"
                        "but the log block tabl is invalid!\n",tmpZoneInDie, pDieInfo->nDie);
             continue;
         }
@@ -2244,7 +3286,7 @@ static __s32 _SearchZoneTbls(struct __ScanDieInfo_t *pDieInfo)
         //set the flag that which mark the zone table status, the current block mapping table is valid
         pDieInfo->TblBitmap |= (1 << tmpZoneInDie);
 
-        FORMAT_DBG("[FORMAT_DBG] Search block mapping table for zone 0x%x of die 0x%x successfully!\n",
+        FORMAT_DBG("NAND: Search block mapping table for zone 0x%x of die 0x%x successfully!\n",
                     tmpZoneInDie, pDieInfo->nDie);
     }
 
@@ -2254,7 +3296,7 @@ static __s32 _SearchZoneTbls(struct __ScanDieInfo_t *pDieInfo)
         if(!(pDieInfo->TblBitmap & (1 << tmpVar)))
         {
             //search block mapping table of the die failed, report result
-            FORMAT_DBG("[FORMAT_DBG] Search block mapping table for die 0x%x failed!\n", pDieInfo->nDie);
+            FORMAT_DBG("NAND: Search block mapping table for die 0x%x failed!\n", pDieInfo->nDie);
             return -1;
         }
     }
@@ -2279,14 +3321,14 @@ static __s32 _SearchZoneTbls(struct __ScanDieInfo_t *pDieInfo)
 */
 static __s32 _RebuildZoneTbls(struct __ScanDieInfo_t *pDieInfo)
 {
-    __s32 i, result;
+    __s32 i, j,result;
 
     //request buffer for get the logical information of every physical block in the die
     pDieInfo->pPhyBlk = (__u16 *)MALLOC(SuperBlkCntOfDie * sizeof(__u16));
     if(!pDieInfo->pPhyBlk)
     {
         //request buffer failed, reprot error
-        FORMAT_ERR("[FORMAT_ERR] Malloc buffer for logical information of physical block failed!\n");
+        FORMAT_ERR("NAND: Malloc buffer for logical information of physical block failed!\n");
 
         return -1;
     }
@@ -2295,7 +3337,7 @@ static __s32 _RebuildZoneTbls(struct __ScanDieInfo_t *pDieInfo)
     if(!pDieInfo->ZoneInfo)
     {
         //request buffer failed, release the buffer which has been got, and report error
-        FORMAT_ERR("[FORMAT_ERR] Malloc buffer for proccess the block mapping table data failed!\n");
+        FORMAT_ERR("NAND: Malloc buffer for proccess the block mapping table data failed!\n");
         FREE(pDieInfo->pPhyBlk,SuperBlkCntOfDie * sizeof(__u16));
 
         return -1;
@@ -2311,17 +3353,19 @@ static __s32 _RebuildZoneTbls(struct __ScanDieInfo_t *pDieInfo)
         pDieInfo->ZoneInfo[i].nFreeBlkIndex = 0;
         MEMSET(pDieInfo->ZoneInfo[i].ZoneTbl, 0xff, BLOCK_CNT_OF_ZONE * sizeof(__u32));
         MEMSET(pDieInfo->ZoneInfo[i].LogBlkTbl, 0xff, MAX_LOG_BLK_CNT * sizeof(struct __LogBlkType_t));
+		for(j=0;j<MAX_LOG_BLK_CNT;j++)
+		{
+			pDieInfo->ZoneInfo[i].LogBlkTbl[j].LogBlkType = 0;
+			pDieInfo->ZoneInfo[i].LogBlkTbl[j].WriteBlkIndex= 0;
+			pDieInfo->ZoneInfo[i].LogBlkTbl[j].ReadBlkIndex= 0;
+		}
     }
 
     //initiate the first super block of the die
     if(pDieInfo->nDie == 0)
-    {
         pDieInfo->nFreeIndex = DIE0_FIRST_BLK_NUM;
-    }
     else
-    {
         pDieInfo->nFreeIndex = 0;
-    }
 
     //read the logical information of every physical block of the die
     result = _GetBlkLogicInfo(pDieInfo);
@@ -2336,21 +3380,24 @@ static __s32 _RebuildZoneTbls(struct __ScanDieInfo_t *pDieInfo)
     result = _GetMapTblBlock(pDieInfo);
     if(result < 0)
     {
-        FORMAT_ERR("[FORMAT_ERR] Get block for saving block mapping table failed in die 0x%x!\n", pDieInfo->nDie);
+        FORMAT_ERR("NAND: Get block for saving block mapping table failed in die 0x%x!\n", pDieInfo->nDie);
         FREE(pDieInfo->pPhyBlk,SuperBlkCntOfDie * sizeof(__u16));
         FREE(pDieInfo->ZoneInfo,ZONE_CNT_OF_DIE * sizeof(struct __ScanZoneInfo_t));
 
         return -1;
     }
-
+    
     //repair the log block table
+    FORMAT_ERR("NAND: Repair the log block table...\n");
     result = _RepairLogBlkTbl(pDieInfo);
+    if(result < 0)
+		FORMAT_ERR("NAND: Repair error!\n");
 
     //allocate the free block to every block mapping table
     result = _DistributeFreeBlk(pDieInfo);
     if(result < 0)
     {
-        FORMAT_ERR("[FORMAT_ERR] There is not enough free blocks for distribute!\n");
+        FORMAT_ERR("NAND: There is not enough free blocks for distribute!\n");
 
         FREE(pDieInfo->pPhyBlk,SuperBlkCntOfDie * sizeof(__u16));
         FREE(pDieInfo->ZoneInfo,ZONE_CNT_OF_DIE * sizeof(struct __ScanZoneInfo_t));
@@ -2362,7 +3409,7 @@ static __s32 _RebuildZoneTbls(struct __ScanDieInfo_t *pDieInfo)
     result = _WriteBlkMapTbl(pDieInfo);
     if(result < 0)
     {
-        FORMAT_ERR("[FORMAT_DBG] Write block mapping table failed!\n");
+        FORMAT_ERR("NAND: Write block mapping table failed!\n");
 
         FREE(pDieInfo->pPhyBlk,SuperBlkCntOfDie * sizeof(__u16));
         FREE(pDieInfo->ZoneInfo,ZONE_CNT_OF_DIE * sizeof(struct __ScanZoneInfo_t));
@@ -2449,13 +3496,12 @@ __s32 FMT_Init(void)
 
     MEMSET(FORMAT_SPARE_BUF, 0xff, SECTOR_CNT_OF_SUPER_PAGE * 4);
 
-    FORMAT_DBG("\n");
-    FORMAT_DBG("[FORMAT_DBG] ===========Logical Architecture Paramter===========\n");
-    FORMAT_DBG("[FORMAT_DBG]    Logic Block Count of Zone:  0x%x\n", LogicArchiPar.LogicBlkCntPerZone);
-    FORMAT_DBG("[FORMAT_DBG]    Page Count of Logic Block:  0x%x\n", LogicArchiPar.PageCntPerLogicBlk);
-    FORMAT_DBG("[FORMAT_DBG]    Sector Count of Logic Page: 0x%x\n", LogicArchiPar.SectCntPerLogicPage);
-    FORMAT_DBG("[FORMAT_DBG]    Zone Count of Die:          0x%x\n", LogicArchiPar.ZoneCntPerDie);
-    FORMAT_DBG("[FORMAT_DBG] ===================================================\n");
+    FORMAT_DBG("===========Logical Architecture Paramter===========\n");
+    FORMAT_DBG("   Logic Block Count of Zone:  0x%x\n", LogicArchiPar.LogicBlkCntPerZone);
+    FORMAT_DBG("   Page Count of Logic Block:  0x%x\n", LogicArchiPar.PageCntPerLogicBlk);
+    FORMAT_DBG("   Sector Count of Logic Page: 0x%x\n", LogicArchiPar.SectCntPerLogicPage);
+    FORMAT_DBG("   Zone Count of Die:          0x%x\n", LogicArchiPar.ZoneCntPerDie);
+    FORMAT_DBG("===================================================\n");
 
     return 0;
 }
@@ -2516,14 +3562,15 @@ __s32 FMT_Init(void)
     SuperBlkCntOfDie = NandStorageInfo.BlkCntPerDie / NandStorageInfo.PlaneCntPerDie;
 
     MEMSET(FORMAT_SPARE_BUF, 0xff, SECTOR_CNT_OF_SUPER_PAGE * 4);
+    
+    FORMAT_DBG("===========Logical Architecture Paramter===========\n");
+    FORMAT_DBG("   Logic Block Count of Zone:  0x%x\n", LogicArchiPar.LogicBlkCntPerZone);
+    FORMAT_DBG("   Page Count of Logic Block:  0x%x\n", LogicArchiPar.PageCntPerLogicBlk);
+    FORMAT_DBG("   Sector Count of Logic Page: 0x%x\n", LogicArchiPar.SectCntPerLogicPage);
+    FORMAT_DBG("   Zone Count of Die:          0x%x\n", LogicArchiPar.ZoneCntPerDie);
+    FORMAT_DBG("===================================================\n");
 
-    FORMAT_DBG("\n");
-    FORMAT_DBG("[FORMAT_DBG] ===========Logical Architecture Paramter===========\n");
-    FORMAT_DBG("[FORMAT_DBG]    Logic Block Count of Zone:  0x%x\n", LogicArchiPar.LogicBlkCntPerZone);
-    FORMAT_DBG("[FORMAT_DBG]    Page Count of Logic Block:  0x%x\n", LogicArchiPar.PageCntPerLogicBlk);
-    FORMAT_DBG("[FORMAT_DBG]    Sector Count of Logic Page: 0x%x\n", LogicArchiPar.SectCntPerLogicPage);
-    FORMAT_DBG("[FORMAT_DBG]    Zone Count of Die:          0x%x\n", LogicArchiPar.ZoneCntPerDie);
-    FORMAT_DBG("[FORMAT_DBG] ===================================================\n");
+	_LSBPageTypeTabInit();
 
     return 0;
 }
@@ -2583,9 +3630,15 @@ __s32 FMT_FormatNand(void)
 
         //search zone tables on the nand flash from several blocks in front of the die
         result = _SearchZoneTbls(&tmpDieInfo);
-		//tmpDieInfo.TblBitmap = 0;
-		//result = -1;
-        if(result < 0)
+#if 0
+		{
+		//for debug
+			PRINT("for debug, force to rebuild nand block table\n");
+		    tmpDieInfo.TblBitmap = 0;
+		    result = -1;
+		}
+#endif
+		if(result < 0)
         {
             tmpTryAgain = 5;
             while(tmpTryAgain > 0)
@@ -2606,7 +3659,7 @@ __s32 FMT_FormatNand(void)
     if(result < 0)
     {
         //format nand disk failed, report error
-        FORMAT_ERR("[FORMAT_ERR] Format nand disk failed!\n");
+        FORMAT_ERR("NAND: Format nand disk failed!\n");
         return -1;
     }
 
@@ -2614,10 +3667,7 @@ __s32 FMT_FormatNand(void)
     return 0;
 }
 
-void clear_NAND_ZI( void )
+void ClearNandStruct( void )
 {
     MEMSET(&PageCachePool, 0x00, sizeof(struct __NandPageCachePool_t));
 }
-
-
-
